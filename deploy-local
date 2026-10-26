@@ -1,0 +1,50 @@
+#!/bin/bash
+# ---------------------------------------------------------------------------
+# deploy-local - reinstall ibmicli from this checkout.
+#
+# Run after changing pyproject.toml dependencies or entry points.
+# Editable installs pick up source changes immediately;
+# dependency and entry-point changes need a reinstall.
+# Running this again is safe.
+#
+# Always use this checkout, regardless of the working folder.
+# ---------------------------------------------------------------------------
+set -euo pipefail
+
+PROJECT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if ! command -v uv > /dev/null; then
+  echo "ERROR: uv is not installed. See https://docs.astral.sh/uv/" >&2
+  exit 2
+fi
+
+echo "== development environment ($PROJECT/.venv) =="
+uv sync --project "$PROJECT" --quiet
+echo "updated"
+
+echo
+echo "== global installation =="
+uv tool install --force --editable "$PROJECT"
+
+echo
+echo "== verification =="
+BIN="$(command -v ibmicli || true)"
+if [ -z "$BIN" ]; then
+  echo "WARNING: 'ibmicli' is not in PATH." >&2
+  echo "            Add ~/.local/bin to PATH, then reopen the terminal." >&2
+  exit 1
+fi
+echo "executable: $BIN"
+echo "version:   $(ibmicli --version)"
+echo "commands:    $(ibmicli --help 2>/dev/null | sed -n 's/^│ \([a-z][a-z-]*\) .*/\1/p' | tr '\n' ' ')"
+if ibmicli config > /dev/null 2>&1; then
+  echo "config:     ok ($(ibmicli config | sed -n 's/^file: *//p'))"
+else
+  echo "config:     missing - run 'ibmicli set-conn'"
+fi
+
+# The ODBC driver for 'ibmicli db' is installed separately.
+# This check reports missing components and installation instructions.
+echo
+echo "== database (ibmicli db) =="
+ibmicli db --check || echo "'ibmicli db' needs these components; other CLI commands remain available."

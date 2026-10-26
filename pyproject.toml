@@ -1,0 +1,22 @@
+[project]
+name = "ibmicli"
+version = "0.1.0"
+description = "Work with IBM i sources: deploy and pull members over FTP"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "prompt-toolkit>=3.0",
+    "pygments>=2.17",
+    "pyodbc>=5",
+    "typer>=0.12",
+]
+
+[project.scripts]
+ibmicli = "ibmicli.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ibmicli"]

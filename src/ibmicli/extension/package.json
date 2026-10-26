@@ -1,0 +1,170 @@
+{
+  "name": "ibmicli",
+  "displayName": "ibmicli",
+  "description": "Run ibmicli tasks with F6 and show compiler diagnostics in Problems. Open and download copies, complete RPG symbols, compare remote members, run cursor SQL, and launch IBM i batch or service-entry-point debugging.",
+  "version": "0.0.0",
+  "publisher": "ibmicli",
+  "license": "MIT",
+  "engines": { "vscode": "^1.70.0" },
+  "categories": ["Programming Languages"],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onLanguage:rpgle",
+    "onLanguage:sqlrpgle",
+    "onLanguage:cl",
+    "onCommand:ibmicli.runTask",
+    "onCommand:ibmicli.debugBatch",
+    "onCommand:ibmicli.debugSep",
+    "onCommand:ibmicli.deployBuildChanged",
+    "onCommand:ibmicli.diffRemote",
+    "onCommand:ibmicli.runSql",
+    "workspaceContains:**/ibmiproj.toml"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "ibmicli.runTask",
+        "title": "ibmicli: run a task on the open file",
+        "category": "ibmicli"
+      },
+      {
+        "command": "ibmicli.openCopy",
+        "title": "ibmicli: open the /copy under the cursor",
+        "category": "ibmicli"
+      },
+      {
+        "command": "ibmicli.pullCopies",
+        "title": "ibmicli: download missing copies",
+        "category": "ibmicli"
+      },
+      {
+        "command": "ibmicli.debugBatch",
+        "title": "ibmicli: batch debug the open file program",
+        "category": "ibmicli"
+      },
+      {
+        "command": "ibmicli.debugSep",
+        "title": "ibmicli: set a service entry point for the open file program",
+        "category": "ibmicli"
+      },
+      {
+        "command": "ibmicli.deployBuildChanged",
+        "title": "ibmicli: upload and build changed sources (with confirmation)",
+        "category": "ibmicli"
+      },
+      {
+        "command": "ibmicli.diffRemote",
+        "title": "ibmicli: compare the file with its IBM i member",
+        "category": "ibmicli"
+      },
+      {
+        "command": "ibmicli.runSql",
+        "title": "ibmicli: run cursor or selected SQL",
+        "category": "ibmicli"
+      },
+      {
+        "command": "ibmicli.refresh",
+        "title": "ibmicli: refresh copy symbols",
+        "category": "ibmicli"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "ibmicli.runSql",
+          "when": "resourceScheme == file && resourceExtname =~ /sql/i",
+          "group": "9_ibmicli@1"
+        }
+      ]
+    },
+    "taskDefinitions": [
+      {
+        "type": "ibmicli",
+        "required": ["args"],
+        "properties": {
+          "args": {
+            "type": "string",
+            "description": "ibmicli arguments to run, without the 'ibmicli' prefix."
+          }
+        }
+      }
+    ],
+    "problemMatchers": [
+      {
+        "name": "ibmicli",
+        "owner": "ibmicli",
+        "source": "ibmicli",
+        "fileLocation": ["autoDetect", "${workspaceFolder}"],
+        "severity": "error",
+        "pattern": [
+          {
+            "regexp": "^\\s+([^\\s():][^():]*\\.[A-Za-z0-9]+):(\\d+)(?::(\\d+))?\\s*$",
+            "file": 1,
+            "line": 2,
+            "column": 3
+          },
+          {
+            "regexp": "^\\s+([A-Z]{2,4}\\d{4}[A-Z]?)\\s+(?:severe )?error\\s+\\((\\d+)\\)\\s+(.*)$",
+            "code": 1,
+            "message": 3,
+            "loop": true
+          }
+        ]
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "ibmicli.runTask",
+        "key": "f6",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "ibmicli.openCopy",
+        "key": "ctrl+f12",
+        "mac": "cmd+f12",
+        "when": "editorTextFocus"
+      }
+    ],
+    "configuration": {
+      "title": "ibmicli",
+      "properties": {
+        "ibmicli.executable": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the `ibmicli` executable. Empty searches PATH and standard locations (`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`)."
+        },
+        "ibmicli.completion": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include symbols declared in copies in completion suggestions."
+        },
+        "ibmicli.pullOnOpen": {
+          "type": "boolean",
+          "default": true,
+          "description": "Download missing members from IBM i when opening a copy."
+        },
+        "ibmicli.confirmPull": {
+          "type": "boolean",
+          "default": true,
+          "description": "Ask before downloading and show the path of the file to create."
+        },
+        "ibmicli.outline": {
+          "type": "string",
+          "enum": ["auto", "on", "off"],
+          "enumDescriptions": [
+            "Enable only when the Halcyon RPGLE extension is absent, avoiding duplicate Outline entries.",
+            "Always enabled.",
+            "Disabled."
+          ],
+          "default": "auto",
+          "description": "File structure for Outline, breadcrumbs and symbol navigation: procedures with local declarations, structures with subfields, and subroutines."
+        },
+        "ibmicli.saveBeforeRun": {
+          "type": "boolean",
+          "default": true,
+          "description": "Save the open file before running an F6 task; tasks read files from disk."
+        }
+      }
+    }
+  }
+}

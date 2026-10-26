@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+build/
+*.egg-info/
+.DS_Store
+
+# Configuration and credentials live in ~/.config/ibmicli/config.toml,
+# outside the repository. Keep credentials out of source control.
+config.toml
+.netrc
