@@ -7,30 +7,30 @@ folder.
 
 ## Why ibmicli
 
-IBM i development has long meant two choices. You edit in a 5250 session,
-or you use an editor that works on members one at a time over a live
-connection. Either way the sources live on the server, outside git, and
-outside the tools the rest of the industry takes for granted.
+ibmicli is for sources that live in QSYS members and are compiled from
+there. It mirrors the source tree as an ordinary local repository,
+`APP/LIBRARY/SOURCEFILE/MEMBER.ext`, one file per member, under git, and makes
+every operation on it a single command: pull, deploy, compile, compare,
+query. It talks to IBM i over FTP: no SSH, nothing to install on the server,
+and the code is compiled and run exactly as before.
 
-ibmicli turns the IBM i source tree into an ordinary local repository:
-`APP/LIBRARY/SOURCEFILE/MEMBER.ext`, one file per member, under git. Every
-operation you need on that tree is a single command: pull, deploy, compile,
-compare, query. Two very different users get the most from it: developers
-working in VS Code, and AI agents working in a terminal.
+Because it is a command-line tool first, two very different users get the
+most from it: developers working in VS Code, and AI agents working in a
+terminal.
 
-### A complete IBM i IDE in VS Code
+### In VS Code
 
 `ibmicli vscode install` builds and installs a VS Code extension from the CLI
-itself, with no npm and no extra setup. You get an RPG workspace where the
-whole codebase is local, so it behaves like a modern IDE:
+itself, with no npm and no extra setup. With the whole codebase local, it
+adds:
 
 - **`/copy` and `/include` work.** Ctrl+click or F12 on a directive opens the
   local file, even across apps and libraries (`/copy GRP_SRC/QCPYSRC,UTILS`
   from a source in another app). A copybook that is not local yet is
   downloaded on request into the right folder. Copies without a library follow
   the environment's library list, as the compiler does.
-- **Completion, hover, go to definition and signatures** see every
-  declaration: procedures, prototypes, data structures and their subfields,
+- **Completion, hover, go to definition and signatures** for free-format RPG
+  see every declaration: procedures, prototypes, data structures and their subfields,
   constants, subroutines. They follow copies recursively, so a prototype
   declared three copybooks deep is one keystroke away. Names containing `£`
   are fully supported.
@@ -49,7 +49,8 @@ whole codebase is local, so it behaves like a modern IDE:
   through IBM's debug extension, configured from the file you are editing.
 - **Build what changed.** git knows which members you touched; one command
   deploys and compiles exactly those, as `*PGM` or `*SRVPGM`. From F6 it
-  shows you the plan and waits for confirmation.
+  shows you the plan and waits for confirmation. Dependencies are not
+  tracked: a changed copybook does not rebuild the programs that include it.
 
 And because sources are plain files in git, you also get branches, history,
 blame, code review, merge requests and full-text search across thousands of
@@ -57,8 +58,8 @@ members.
 
 ### A CLI built for AI agents
 
-Without VS Code, ibmicli is the missing link between AI coding agents and
-IBM i. An agent such as Claude Code, Codex or Copilot cannot open a 5250
+Without VS Code, ibmicli gives AI coding agents a way into IBM i. An agent
+such as Claude Code, Codex or Copilot cannot open a 5250
 screen or click through a remote member browser. It can read files, run
 commands and read their output. ibmicli turns every IBM i action into exactly
 that:
@@ -110,17 +111,28 @@ The design choices that make this work for agents are deliberate:
   human gets from F12: where a prototype is declared, what a data structure
   contains, which copybook a constant comes from.
 
-In the age of AI, a platform whose code an agent cannot reach is a platform
-that gets left behind. ibmicli puts decades of RPG, CL and SQL within reach of
+A platform whose code an agent cannot reach risks being left behind. ibmicli puts decades of RPG, CL and SQL within reach of
 the same tools that already work on every other codebase, without changing
 how the code is compiled or run on IBM i.
 
-### Scope
+### Scope and limits
 
 FTP handles sources and CL commands. Only `db` uses ODBC. Compilation commands
 are tasks you define in configuration; ibmicli supplies no build recipes.
 It does not replace a 5250 session or the IBM debugger, and its RPG symbol
 reader is not a compiler.
+
+ibmicli is young, and you should know where it stands:
+
+- It has been used on one system (IBM i 7.5) from macOS. Windows and Linux
+  are untested, and there is no automated test suite yet.
+- FTP is not encrypted (FTPS is not supported), and the password is stored in
+  plain text in `config.toml`, readable only by you (mode 600).
+- Uploads go through `remote_charset`, ISO-8859-1 by default. A character it
+  cannot represent, such as `€`, is replaced with `?` and reported.
+- Building changed sources assumes one module per object and does not follow
+  dependencies.
+- The configuration format is recent and may still change.
 
 Build output goes to the terminal. Comparisons and remote documents stay in
 memory; no build logs or diff files are created locally. `db --out FILE`
