@@ -137,7 +137,7 @@ For `db`, install the IBM i Access ODBC driver separately on each machine;
 `ibmicli db --check` reports missing components and platform-specific remedies.
 
 ```sh
-uv tool install git+https://gitlab.com/alessandroToninelli/ibmicli.git
+uv tool install git+https://github.com/aletoninelli/ibmicli.git
 ibmicli --version
 ibmicli set-conn
 ```
@@ -153,7 +153,7 @@ ibmicli vscode install
 To force a fresh installation from Git:
 
 ```sh
-uv tool install --force --reinstall git+https://gitlab.com/alessandroToninelli/ibmicli.git
+uv tool install --force --reinstall git+https://github.com/aletoninelli/ibmicli.git
 ```
 
 For development, run these from a checkout:
@@ -917,3 +917,7 @@ the ibmicli extension.
 | F6 runs a different command | Resolve the reported keybinding conflict or change `tasks_key` and reinstall |
 | Extension still uses old text or behavior | Reinstall it and run `Developer: Reload Window` |
 | Accents or symbols arrive incorrectly | Check local UTF-8, remote character set and server CCSID; uploads use FTP line conversion |
+
+## License
+
+MIT. See [LICENSE](LICENSE).

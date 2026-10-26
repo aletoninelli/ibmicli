@@ -3,6 +3,8 @@ name = "ibmicli"
 version = "0.1.0"
 description = "Work with IBM i sources: deploy and pull members over FTP"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "prompt-toolkit>=3.0",
@@ -10,6 +12,9 @@ dependencies = [
     "pyodbc>=5",
     "typer>=0.12",
 ]
+
+[project.urls]
+Repository = "https://github.com/aletoninelli/ibmicli"
 
 [project.scripts]
 ibmicli = "ibmicli.cli:main"
