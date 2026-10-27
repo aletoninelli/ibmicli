@@ -1,934 +1,893 @@
 # ibmicli
 
 ibmicli is a Python CLI for working with IBM i source members as local files.
-It uploads and downloads members over FTP, runs your CL build commands, and
-connects local RPG sources to VS Code. Install it once and use it from any
-folder.
+It downloads and uploads members over FTP, runs your own CL build commands, and
+connects local RPG sources to VS Code. Install it once per machine and use it
+from any folder.
+
+- [Why ibmicli](#why-ibmicli)
+- [How it fits together](#how-it-fits-together): connection, environments, project
+- [Installation](#installation)
+- [Getting started, step by step](#getting-started-step-by-step)
+- [Configuration in detail](#configuration-in-detail)
+- [Tasks and compiler errors](#tasks-and-compiler-errors)
+- [VS Code](#vs-code)
+- [Command reference](#command-reference)
+- [Scope and limits](#scope-and-limits)
+- [Common problems](#common-problems)
 
 ## Why ibmicli
 
-ibmicli is for sources that live in QSYS members and are compiled from
-there. It mirrors the source tree as an ordinary local repository,
+ibmicli is for sources that live in QSYS members and are compiled from there.
+It mirrors them as an ordinary local repository,
 `APP/LIBRARY/SOURCEFILE/MEMBER.ext`, one file per member, under git, and makes
-every operation on it a single command: pull, deploy, compile, compare,
-query. It talks to IBM i over FTP: no SSH, nothing to install on the server,
-and the code is compiled and run exactly as before.
+every operation a single command: pull, deploy, compile, compare, query. It
+talks to IBM i over FTP: no SSH, nothing to install on the server, and the code
+is compiled and run exactly as before.
 
-Because it is a command-line tool first, two very different users get the
-most from it: developers working in VS Code, and AI agents working in a
-terminal.
+Because sources are plain files in git, you also get branches, history, blame,
+code review and full-text search across thousands of members.
 
 ### In VS Code
 
 `ibmicli vscode install` builds and installs a VS Code extension from the CLI
-itself, with no npm and no extra setup. With the whole codebase local, it
-adds:
+itself, with no npm and no extra setup. It adds:
 
-- **`/copy` and `/include` work.** Ctrl+click or F12 on a directive opens the
-  local file, even across apps and libraries (`/copy GRP_SRC/QCPYSRC,UTILS`
-  from a source in another app). A copybook that is not local yet is
-  downloaded on request into the right folder. Copies without a library follow
-  the environment's library list, as the compiler does.
-- **Completion, hover, go to definition and signatures** for free-format RPG
-  see every declaration: procedures, prototypes, data structures and their subfields,
-  constants, subroutines. They follow copies recursively, so a prototype
-  declared three copybooks deep is one keystroke away. Names containing `£`
-  are fully supported.
-- **Outline** of procedures, data structures and subroutines, updated as you
-  type.
-- **Compile with F6.** Your own compile tasks run as VS Code tasks. Compiler
-  errors are read from the event file and mapped back to your local file,
-  line and column, even through SQL precompilation and inside copybooks. They
-  land in the Problems panel; a click takes you to the line.
-- **Compare with the server.** See the difference between your file and the
-  member on IBM i in VS Code's diff view, without writing a file.
-- **Run SQL from the source.** Put the cursor on an `exec sql`, press F6, and
-  ibmicli extracts the statement, asks for host-variable values and shows the
-  results beside the editor. Read-only.
-- **Debug** batch programs and service entry points (with user and condition)
-  through IBM's debug extension, configured from the file you are editing.
-- **Build what changed.** git knows which members you touched; one command
-  deploys and compiles exactly those, as `*PGM` or `*SRVPGM`. From F6 it
-  shows you the plan and waits for confirmation. Dependencies are not
-  tracked: a changed copybook does not rebuild the programs that include it.
-
-And because sources are plain files in git, you also get branches, history,
-blame, code review, merge requests and full-text search across thousands of
-members.
+- **`/copy` and `/include` that work.** Ctrl+click or F12 opens the local
+  file, even across apps and libraries. A copybook that is not local yet is
+  downloaded on request into the right folder.
+- **Completion, hover, go to definition and signatures** for free-format RPG,
+  following copies recursively. Names containing `£` are supported.
+- **Outline** of procedures, data structures and subroutines.
+- **Compile with F6.** Your compile tasks run as VS Code tasks; compiler
+  errors land in the Problems panel at the right line of your local file,
+  even through SQL precompilation and inside copybooks.
+- **Compare with the server**, in VS Code's diff view, without writing files.
+- **Run the SQL under the cursor** (read-only) and see the results beside the
+  editor.
+- **Debug** batch programs and service entry points through IBM's debug
+  extension.
+- **Build what changed**: git knows which members you touched; one command
+  deploys and compiles exactly those.
 
 ### A CLI built for AI agents
 
-Without VS Code, ibmicli gives AI coding agents a way into IBM i. An agent
-such as Claude Code, Codex or Copilot cannot open a 5250
-screen or click through a remote member browser. It can read files, run
-commands and read their output. ibmicli turns every IBM i action into exactly
-that:
+An AI coding agent (Claude Code, Codex, Copilot...) cannot open a 5250 screen,
+but it can read files, run commands and read their output. ibmicli turns every
+IBM i action into exactly that:
 
 | The agent wants to... | Command |
 | --- | --- |
 | Get the sources | `ibmicli pull -lib LIB -file QRPGLESRC -all` |
-| Understand a program and what it includes | `ibmicli copy -from FILE -all --json`, `ibmicli symbols FILE --json` |
-| Edit | Local files, with the agent's own tools |
+| Understand a program and its copybooks | `ibmicli copy -from FILE -all --json`, `ibmicli symbols FILE --json` |
 | See what it changed compared with IBM i | `ibmicli diff FILE`, `ibmicli status` |
 | Save the member | `ibmicli deploy -src FILE` |
-| Compile and fix the errors | `ibmicli run compile -src FILE`, which prints `path:line:col` and the message |
-| Look at the data in Db2 for i | `ibmicli db "select ..." --json` |
+| Compile and fix the errors | `ibmicli run compile -src FILE` prints `path:line:col` and the message |
+| Look at the data | `ibmicli db "select ..." --json` |
 | Test the SQL embedded in a program | `ibmicli db -from FILE -line N --var NAME=VALUE --json` |
 
-A typical session needs no human in the loop until the review:
+What makes this safe and reliable for agents:
 
-```sh
-cd ORD                                   # the app folder
-ibmicli pull -lib ORD_SRC -file QRPGLESRC -mbr ORDCHK -proj ../ibmiproj.toml
-ibmicli copy -from ORD_SRC/QRPGLESRC/ORDCHK.sqlrpgle -all -pull -proj ../ibmiproj.toml
-ibmicli symbols ORD_SRC/QRPGLESRC/ORDCHK.sqlrpgle --json -proj ../ibmiproj.toml
-ibmicli db "select * from ordhdr fetch first 5 rows only" --json -proj ../ibmiproj.toml
-# ...the agent edits the file...
-ibmicli diff ORD_SRC/QRPGLESRC/ORDCHK.sqlrpgle -proj ../ibmiproj.toml
-ibmicli run compile -src ORD_SRC/QRPGLESRC/ORDCHK.sqlrpgle -proj ../ibmiproj.toml
-# ORD_SRC/QRPGLESRC/ORDCHK.sqlrpgle:142:9
-#   RNF7030 severe error (30)  The name or indicator WKTOT is not defined.
-# ...the agent fixes line 142 and compiles again...
-```
-
-The design choices that make this work for agents are deliberate:
-
-- **Output made to be read by a program.** `--json` writes only JSON to
-  stdout. Exit codes are consistent: `0` done, `1` operation failed, `2` usage
-  or configuration error. Compiler errors use the `file:line:col` form every
-  tool understands.
+- **Output for programs.** `--json` writes only JSON to stdout. Exit codes are
+  consistent: `0` done, `1` operation failed, `2` usage or configuration error.
 - **Nothing is guessed.** Library, source file, environment and object library
   come from `ibmiproj.toml` or from explicit options. When something is
-  missing, the error says what to supply, so an agent can correct itself
-  instead of compiling in the wrong library.
-- **Safe by default.** Every command that touches IBM i has `-n` to show what
-  it would do without connecting. `db` opens a read-only connection; changes
-  need `--write`, and `--write --tx` keeps them in a transaction that is
-  rolled back unless `commit` is typed. This lets you grant an agent `ibmicli
-  db` freely and require confirmation for `ibmicli db --write`, `deploy` and
-  `run` in its permission settings.
-- **Context, not just text.** `copy` and `symbols` give the agent what a
-  human gets from F12: where a prototype is declared, what a data structure
-  contains, which copybook a constant comes from.
+  missing, the error says what to supply.
+- **Safe by default.** Every command that touches IBM i has `-n` (dry run).
+  `db` is read-only unless `--write` is given, so you can allow `ibmicli db`
+  freely and require confirmation for `db --write`, `deploy` and `run`.
 
-A platform whose code an agent cannot reach risks being left behind. ibmicli puts decades of RPG, CL and SQL within reach of
-the same tools that already work on every other codebase, without changing
-how the code is compiled or run on IBM i.
+## How it fits together
 
-### Scope and limits
+There are three things to configure. Each lives in one place:
 
-FTP handles sources and CL commands. Only `db` uses ODBC. Compilation commands
-are tasks you define in configuration; ibmicli supplies no build recipes.
-It does not replace a 5250 session or the IBM debugger, and its RPG symbol
-reader is not a compiler.
+| What | Where | Written by | Scope |
+| --- | --- | --- | --- |
+| **Connection**: host, user, password, CCSID | `~/.config/ibmicli/config.toml` | `ibmicli set-conn` | this machine, private (mode 600) |
+| **Environments**: how to set up a library list | same file, `[envs.NAME]` | `ibmicli env set` | this machine |
+| **Project**: which folders are apps, and which environment and object library each app uses | `ibmiproj.toml` at the repository root | `ibmicli set-project` | the repository, committed to git, no credentials |
 
-ibmicli is young, and you should know where it stands:
+Your sources sit in the repository with this layout:
 
-- It has been used on one system (IBM i 7.5) from macOS. Windows and Linux
-  are untested, and there is no automated test suite yet.
-- FTP is not encrypted (FTPS is not supported), and the password is stored in
-  plain text in `config.toml`, readable only by you (mode 600).
-- Uploads go through `remote_charset`, ISO-8859-1 by default. A character it
-  cannot represent, such as `€`, is replaced with `?` and reported.
-- Building changed sources assumes one module per object and does not follow
-  dependencies.
-- The configuration format is recent and may still change.
+```text
+sources/                                    repository root
+  ibmiproj.toml                             the project file
+  MYAPP/                                    an app, declared in ibmiproj.toml
+    MYAPP_SRC/                              source library
+      QRPGLESRC/                            source file
+        HELLO.sqlrpgle                      member HELLO, type SQLRPGLE
+```
 
-Build output goes to the terminal. Comparisons and remote documents stay in
-memory; no build logs or diff files are created locally. `db --out FILE`
-explicitly exports query results. Downloads write the requested source files,
-setup commands write configuration, and interactive prompts keep history in
-the user's configuration directory. `show -edit` and extension installation
-use temporary files.
+From a file path, ibmicli knows everything it needs to deploy, compile or
+debug it:
 
-## Installation and updates
+```text
+MYAPP / MYAPP_SRC / QRPGLESRC / HELLO.sqlrpgle
+  │        │           │          └─ member HELLO, source type SQLRPGLE
+  │        │           └─ source file QRPGLESRC
+  │        └─ source library MYAPP_SRC
+  └─ app MYAPP ── ibmiproj.toml ──> env = "dev", objlib = "MYAPP_OBJ"
+                                      │
+                    config.toml ──> [envs.dev] library list, current library
+```
 
-Requires Python 3.11 or later and [uv](https://docs.astral.sh/uv/). The packaged
-Python dependencies are installed by uv. FTP access needs no ODBC driver.
-For `db`, install the IBM i Access ODBC driver separately on each machine;
-`ibmicli db --check` reports missing components and platform-specific remedies.
+Two rules follow from this:
+
+1. **Commands that use the project need `-proj PATH/TO/ibmiproj.toml`.** The
+   CLI never searches for the file. VS Code finds it for you.
+2. **Nothing is guessed.** If a file is not inside a declared app, you supply
+   the values yourself (`-lib`/`-file`, or `-var` for tasks).
+
+## Installation
+
+Requires Python 3.11 or later and [uv](https://docs.astral.sh/uv/).
 
 ```sh
 uv tool install git+https://github.com/aletoninelli/ibmicli.git
 ibmicli --version
-ibmicli set-conn
 ```
 
-Make sure the uv tool executable directory, usually `~/.local/bin`, is in PATH.
-Update the CLI and its bundled VS Code extension with:
+Make sure the uv tool directory, usually `~/.local/bin`, is in your PATH.
+
+FTP needs nothing else. Only `db` (SQL) needs the **IBM i Access ODBC driver**,
+installed separately; `ibmicli db --check` tells you what is missing and how
+to install it on your system.
+
+To update the CLI and its VS Code extension:
 
 ```sh
 uv tool upgrade ibmicli
 ibmicli vscode install
 ```
 
-To force a fresh installation from Git:
+## Getting started, step by step
+
+This walkthrough starts from nothing and ends with a program compiled from
+VS Code. The example uses:
+
+| | |
+| --- | --- |
+| Source library | `MYAPP_SRC` (source files `QRPGLESRC`, `QCPYSRC`) |
+| Object library | `MYAPP_OBJ` |
+| Environment program | `CALL TOOLS/ENVPGM` sets the library list (optional) |
+| Repository folder | `~/sources` |
+
+Replace them with your own names. Commands that change something accept `-n`
+to show what they would do first.
+
+### Step 1: connect to IBM i
 
 ```sh
-uv tool install --force --reinstall git+https://github.com/aletoninelli/ibmicli.git
+ibmicli set-conn
 ```
 
-For development, run these from a checkout:
+It asks for host, user and password (plus optional CCSID and debug settings,
+which you can skip with Enter), tests the FTP connection, and saves
+`~/.config/ibmicli/config.toml`. You do this once per machine.
 
-```sh
-uv sync
-uv tool install --editable .
-./deploy-local
-```
+### Step 2: create an environment
 
-An editable install picks up Python source edits immediately. Run
-`./deploy-local` after changing dependencies or entry points in
-`pyproject.toml`. Reinstall the VS Code extension after editing its sources.
-
-## Global configuration and environments
-
-`ibmicli set-conn` prompts for host, user, password and optional CCSID and debug
-settings. It tests connections unless `--no-test` is supplied, then saves
-`~/.config/ibmicli/config.toml` with mode 600. Credentials belong only here.
-`XDG_CONFIG_HOME` changes the configuration directory; `IBMICLI_CONFIG` selects
-a specific file, useful for isolated tests.
-
-An environment describes the job library list. It can run your setup CL:
-
-```toml
-[envs.dev]
-setup = ["CALL TOOLS/ENVPGM"]
-curlib = "MYAPP_OBJ"
-libl = ["MYAPP_SRC", "MYAPP_DAT", "COMMON_SRC", "TOOLS"]
-```
-
-With `setup`, `env set` and `env refresh` run those commands and read the
-resulting `curlib` and user `libl` from IBM i. These cached values also support
-offline plans, debug settings and copy lookup. Refresh after changing the
-remote environment program.
-
-Alternatively, omit `setup` and supply the list yourself:
-
-```toml
-[envs.manual]
-curlib = "MYAPP_OBJ"
-libl = ["MYAPP_SRC", "MYAPP_DAT"]
-```
-
-ibmicli generates `CHGLIBL` or `CHGCURLIB` for this form. The current library
-is the default object destination unless an app sets `objlib`. Empty, QGPL
-and `*CRTDFT` current libraries are refused as implicit build destinations.
-Unqualified copies search the current library first, then the user library
-list in order. Qualified names supply their own library.
+An environment says **how to set up the library list** of the job that
+compiles your code. Create one called `dev`:
 
 ```sh
 ibmicli env set dev
-ibmicli env use dev
-ibmicli env refresh dev
-ibmicli env refresh -all
-ibmicli env ls
 ```
 
-`env use` persists the environment used by `db` and the shell prompt. Tasks
-and debug use their project app's environment, or an explicit `run -var
-env=NAME`; they do not fall back to the active environment. The first
-configured environment becomes active automatically.
+It asks which of two ways you use:
 
-`ibmicli config` shows effective values and mappings without displaying the
-password. Settings such as `tasks_key`, `debug_host` and `debug_batch` are
-root TOML keys: put them before any `[table]`.
-
-## One project, several apps
-
-Keep one `ibmiproj.toml` at the repository root. It contains app declarations,
-folder-name exceptions and repository tasks, without credentials.
+- **`cl`**: you already have a program or command that sets up the library
+  list (for example `CALL TOOLS/ENVPGM`). Type it; ibmicli runs it on IBM i
+  and reads back the resulting current library and library list.
+- **`list`**: you type the current library and the library list yourself.
 
 ```text
-sources/
-  ibmiproj.toml
-  MYAPP/                         declared by [apps.MYAPP]
-    MYAPP_SRC/                   source library
-      QRPGLESRC/                 source physical file
-        HELLO.sqlrpgle           member HELLO
-      QCPYSRC/
-        CONSTS.rpgle
-  SHARED/                        declared by [apps.SHARED]
-    COMMON_SRC/
-      QPROTSRC/
-        PROCS.rpgle
-  docs/                          not an app
+$ ibmicli env set dev
+New environment 'dev'. How is the library list set?
+  cl     with your CL commands, e.g. CALL of an environment program:
+         ibmicli reads the resulting library list from IBM i
+  list   by supplying current library and user library list
+Mode (cl/list) [cl]: cl
+Environment setup CL, one command per line; an empty line ends the list.
+  CL 1: CALL TOOLS/ENVPGM
+  CL 2:
+testing environment 'dev' on 10.0.0.5
+OK    environment 'dev': current library MYAPP_OBJ, 3 user libraries
+OK    environment 'dev' saved to /Users/me/.config/ibmicli/config.toml
 ```
+
+Check it with `ibmicli env ls`. If you later change the environment program
+on IBM i, run `ibmicli env refresh dev`.
+
+### Step 3: create the project
+
+Create the repository folder and declare the app. This writes `ibmiproj.toml`;
+it does not create any other folder.
+
+```sh
+mkdir ~/sources
+cd ~/sources
+git init
+ibmicli set-project MYAPP -env dev -objlib MYAPP_OBJ -proj ibmiproj.toml
+```
+
+The file now contains:
 
 ```toml
 [apps.MYAPP]
 env = "dev"
 objlib = "MYAPP_OBJ"
-
-[apps.SHARED]
-env = ""
-objlib = ""
 ```
 
-`[apps.MYAPP]` declares the immediate child folder `MYAPP` as an app. For
-`MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle`, the next two folders supply library
-`MYAPP_SRC` and source file `QRPGLESRC`. The app supplies `env` and `objlib`.
-An empty `objlib` uses its environment's current library. An app without an
-environment can hold sources for reading and copy resolution.
+`objlib` is where programs are created. With `-objlib -` (empty) the
+environment's current library is used.
 
-Folder names normally match IBM i object names. Exceptions map local folder
-to remote name. Global mappings apply to every app; app mappings override
-them for the same local folder:
+### Step 4: download the sources
 
-```toml
-[libraries]
-SOURCES = "MYAPP_SRC"
-
-[srcfile]
-RPG = "QRPGLESRC"
-
-[apps.SHARED.libraries]
-SOURCES = "COMMON_SRC"
-
-[apps.SHARED.srcfile]
-RPG = "QPROTSRC"
-```
-
-Here `MYAPP/SOURCES/RPG/HELLO.sqlrpgle` resolves to
-`MYAPP_SRC/QRPGLESRC(HELLO)`, while `SHARED/SOURCES/RPG/PROCS.rpgle` resolves
-to `COMMON_SRC/QPROTSRC(PROCS)`. Quote TOML folder keys containing spaces.
-
-An undeclared folder supplies no app, library or source file, even if its
-subfolders look like IBM i names. A file outside `LIBRARY/SOURCEFILE` also
-needs explicit values. Unknown keys inside `[apps.NAME]` are errors; the
-allowed keys are `env`, `objlib`, `srclib`, `libraries` and `srcfile`.
-
-### Apps with a single source library
-
-If an app uses only one source library, you can drop the library folder level.
-Set `srclib` and put the source file folders straight inside the app:
-
-```text
-repository/
-  ibmiproj.toml
-  api/
-    src/                         source file QRPGLESRC (mapped below)
-      GIRI.sqlrpgle              member API_SRC/QRPGLESRC(GIRI)
-```
-
-```toml
-[apps.API]
-env = "api"
-objlib = ""
-srclib = "API_SRC"
-
-[apps.API.srcfile]
-src = "QRPGLESRC"
-```
-
-The folder right after the app is the source file and the library is always
-`srclib`. Such an app has no room for other libraries, so `[apps.NAME.libraries]`
-is an error there, and a `/copy` to another library (say `CGIDEV2/QRPGLESRC,X`)
-needs an app of its own:
-
-```bash
-ibmicli set-project API -srclib API_SRC -proj ibmiproj.toml
-ibmicli set-project CGIDEV2 -env - -srclib CGIDEV2 -proj ibmiproj.toml
-cd api && ibmicli pull -lib API_SRC -file QRPGLESRC -all -proj ../ibmiproj.toml   # into api/src/
-```
-
-`-srclib -` turns the app back into one with library folders.
-
-## The -proj rule
-
-The CLI never searches for a project. Pass `-proj FILE`, naming the actual
-TOML file, not its directory. VS Code finds the nearest `ibmiproj.toml` while
-walking from the open file to the open workspace root and passes it for you.
-Open the repository root so that search can reach the file.
-
-For a source inside a declared app, `-proj` supplies its mapping and app
-values. Outside the repository it supplies no source mapping: use
-`-lib/-file` for transfers and comparisons, or `-var` for task placeholders.
-Repository tasks can still be selected explicitly with `-proj`.
-
-| Command | Without `-proj` | What `-proj` adds |
-| --- | --- | --- |
-| `deploy` | Requires `-lib` and `-file` | Source library and source file from the file's app path; no environment setup |
-| `pull` | Use `-path` or `-lib/-file`; default destination is `LIBRARY/SOURCEFILE` under the current location | App folder exceptions; inside a source-file folder, omission of `-lib/-file` |
-| `list` | Supply `-lib` and `-f` | Current project folder's library and source file; a library folder can supply `-lib` |
-| `diff` | Supply `-lib` and `-file` | Member mapping from each local path |
-| `run` | Global tasks and explicit `-var` values | App environment/setup, object/current library, source names and repository tasks |
-| `tasks` | Global tasks | Repository tasks, overriding global names |
-| `copy`, `symbols` | No project copy resolution; `symbols -local` still reads declarations | Copy locations across apps and the source environment's search list |
-| `db` | Active environment, or explicit `-lib` | Environment of the source/current folder's app and its object library |
-| `status` | Requires `-proj` | Declared apps and known source-file folders to compare |
-| `deploy-build-changed` | Requires `-proj` | Source classification and build context |
-| `debug` | Requires `-proj` | App environment and object library |
-| `show`, `env`, `set-conn`, `config`, `vscode`, `shell` | Work without a project | No `-proj` option |
-| `set-project` | Requires an explicit destination file | Creates or updates the selected project |
-
-Without `-o`, pull always retains the library/source-file structure. Inside a
-project app it places files under that app, with its mappings. Elsewhere it
-uses the current location, reusing a matching library/source-file folder
-rather than nesting it again. It does not choose another app as a download
-destination. Copy resolution separately searches all declared apps to locate
-a referenced library.
-
-## Start from an empty folder
-
-First configure a `dev` environment as above. Create a repository folder and
-declare two apps; these commands create the TOML, not the app directories:
-
-```sh
-mkdir sources
-cd sources
-ibmicli set-project MYAPP -env dev -objlib MYAPP_OBJ -proj ibmiproj.toml
-ibmicli set-project SHARED -env - -objlib - -proj ibmiproj.toml
-```
-
-List every member of every source file in a library:
+See what is in the library:
 
 ```sh
 ibmicli list -lib MYAPP_SRC -f '*ALL'
 ```
 
-Each output line is a `LIBRARY/FILE,MEMBER` path. Inspect the download of a
-member before running it:
-
-```sh
-ibmicli pull -path MYAPP_SRC/QRPGLESRC,HELLO -n
-```
-
-To populate an app with every listed member, create and enter the app folder
-first. The project is passed as a file, relative to that location:
+Then download from **inside the app folder**. That is how pull knows the files
+belong to `MYAPP`; run from the repository root, it would put them in
+`~/sources/MYAPP_SRC/...` instead.
 
 ```sh
 mkdir MYAPP
 cd MYAPP
-ibmicli list -lib MYAPP_SRC -f '*ALL' | while IFS= read -r member; do
-  ibmicli pull -path "$member" -proj ../ibmiproj.toml -n
-done
+ibmicli pull -lib MYAPP_SRC -file QRPGLESRC -all -proj ../ibmiproj.toml
+ibmicli pull -lib MYAPP_SRC -file QCPYSRC -all -proj ../ibmiproj.toml
 cd ..
 ```
 
-Review the `DRY` destinations, then remove `-n` to perform those downloads.
-Repeat for shared sources using `SHARED` and `COMMON_SRC`.
-
-Resolve missing copies before requesting downloads:
-
-```sh
-ibmicli copy -from MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle -all -pull -proj ibmiproj.toml -n
+```text
+folder /Users/me/sources/MYAPP/MYAPP_SRC/QRPGLESRC
+OK    MYAPP_SRC/QRPGLESRC(HELLO)  ->  /Users/me/sources/MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle
+...
 ```
 
-Run the same command without `-n` to download them. Then install the extension
-and open the repository root in VS Code:
+If a program includes copybooks from other libraries, download them too. They
+go into the folder where the compiler would find them:
 
 ```sh
-ibmicli vscode install
-code .
+ibmicli copy -from MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle -all -pull -proj ibmiproj.toml
 ```
 
-Add the `compile` task from the task section below to `ibmiproj.toml`.
-Inspect it before executing:
+Commit the result: `git add . && git commit -m "Sources from IBM i"`.
+
+### Step 5: add a compile task
+
+ibmicli has no built-in compile commands: you write them, as **tasks**. Add
+this to `ibmiproj.toml`:
+
+```toml
+[tasks.compile]
+label = "Upload and compile"
+ext = ["sqlrpgle"]
+env = true
+steps = [
+  "ibmicli deploy -src {file} -lib {srclib} -file {srcfile}",
+  "CRTSQLRPGI OBJ({objlib}/{member}) SRCFILE({srclib}/{srcfile}) SRCMBR({member}) OBJTYPE(*PGM) OPTION(*EVENTF) DBGVIEW(*SOURCE)",
+]
+```
+
+It uploads the file, sets up the `dev` environment (`env = true`), then
+compiles. The `{...}` placeholders are filled from the file path and the
+project. `OPTION(*EVENTF)` is what lets ibmicli show compiler errors at the
+right line.
+
+Check what it would do, without connecting:
 
 ```sh
-ibmicli tasks compile -proj ibmiproj.toml
 ibmicli run compile -src MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle -proj ibmiproj.toml -n
 ```
 
-The plan prints an upload, environment setup and compilation. After review,
-run without `-n`, or press F6 in VS Code and select `compile`.
+```text
+task compile  env dev  member HELLO  ->  MYAPP_OBJ
+> ibmicli deploy -src MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle -lib MYAPP_SRC -file QRPGLESRC
+> CALL TOOLS/ENVPGM
+> CRTSQLRPGI OBJ(MYAPP_OBJ/HELLO) SRCFILE(MYAPP_SRC/QRPGLESRC) SRCMBR(HELLO) OBJTYPE(*PGM) OPTION(*EVENTF) DBGVIEW(*SOURCE)
+OK    HELLO  ->  Upload and compile
+```
+
+### Step 6: edit, compare, compile
+
+Edit `HELLO.sqlrpgle`, then see what changed compared with the member on IBM i
+(`-` is IBM i, `+` is your file):
+
+```sh
+ibmicli diff MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle -proj ibmiproj.toml
+```
+
+Compile for real by dropping `-n`:
+
+```sh
+ibmicli run compile -src MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle -proj ibmiproj.toml
+```
+
+If the compiler finds errors, they are printed with their location in your
+local file:
+
+```text
+MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle:42:9
+  RNF7030 severe error (30)  The name or indicator WKTOT is not defined.
+```
+
+### Step 7: open it in VS Code
+
+```sh
+ibmicli vscode install
+code ~/sources
+```
+
+Open the **repository root**, so the extension can find `ibmiproj.toml`.
+Now in any source file:
+
+- **F6** opens the menu: `compile`, compare with IBM i, run SQL, debug.
+- **F12** on a `/copy` opens the copybook.
+- Compiler errors appear in the **Problems** panel.
+
+### Your daily routine
+
+| To... | Run (or press F6 in VS Code) |
+| --- | --- |
+| Get the latest version of a member | `ibmicli pull -lib MYAPP_SRC -file QRPGLESRC -mbr HELLO -f -proj ../ibmiproj.toml` (from `MYAPP/`) |
+| See every file that differs from IBM i | `ibmicli status -proj ibmiproj.toml` |
+| Compile one file | `ibmicli run compile -src FILE -proj ibmiproj.toml` |
+| Upload and compile everything changed since the last commit | `ibmicli deploy-build-changed -proj ibmiproj.toml -n`, then without `-n` |
+| Query the database | `ibmicli db -proj ../ibmiproj.toml` (from `MYAPP/`) opens an `sql>` prompt with the app's library list |
+
+## Configuration in detail
+
+### The global file: `config.toml`
+
+`~/.config/ibmicli/config.toml`, readable only by you. `set-conn` and `env set`
+write it; you can also edit it. A complete example:
+
+```toml
+# Written by set-conn
+host = "10.0.0.5"
+user = "MYUSER"
+password = "..."
+ccsid = "1144"                       # optional, server CCSID
+remote_charset = "iso-8859-1"        # encoding of the bytes sent over FTP
+
+# Optional settings: always at the top, before any [table]
+tasks_key = "f6"                     # VS Code menu shortcut
+debug_host = "ibmi.example.com"      # see "debug"
+env = "dev"                          # active environment, for db and the shell
+
+# Environments (see below)
+[envs.dev]
+setup = ["CALL TOOLS/ENVPGM"]
+curlib = "MYAPP_OBJ"
+libl = ["MYAPP_SRC", "MYAPP_DAT", "TOOLS"]
+
+# Tasks shared by every repository on this machine
+[tasks.wrkactjob]
+steps = ["WRKACTJOB"]
+```
+
+Top-level keys such as `tasks_key` and `debug_host` must come **before** the
+first `[table]`: in TOML, a key written after `[envs.dev]` belongs to that
+environment. `ibmicli config` shows the effective values (never the password).
+
+`XDG_CONFIG_HOME` moves the configuration directory; `IBMICLI_CONFIG` points
+to a specific file, useful for tests.
+
+### Environments
+
+An environment describes one thing: the job's library list. There are two
+ways to write one, and you choose per environment.
+
+**With your own setup CL.** Use this if you already have an environment
+program. You write `setup`; ibmicli runs it, reads the result and writes
+`curlib` and `libl` for you:
+
+```toml
+[envs.dev]
+setup = ["CALL TOOLS/ENVPGM"]        # you write this
+curlib = "MYAPP_OBJ"                 # ibmicli writes these two
+libl = ["MYAPP_SRC", "MYAPP_DAT", "TOOLS"]
+```
+
+The saved list lets VS Code, debug and `-n` work without connecting. After
+changing the environment program on IBM i, run `ibmicli env refresh dev` (or
+`env refresh -all`).
+
+**With an explicit list.** Leave out `setup` and write the list yourself;
+ibmicli turns it into a `CHGLIBL`:
+
+```toml
+[envs.test]
+curlib = "MYAPP_OBJ"
+libl = ["MYAPP_SRC", "MYAPP_DAT"]
+```
+
+**Which environment is used:**
+
+| Command | Environment |
+| --- | --- |
+| `run` (tasks), `debug`, `deploy-build-changed` | the app's `env` in `ibmiproj.toml`, or `-var env=NAME` |
+| `db` | with `-proj`, the environment of the app you are in (or of the `-from` file); otherwise the active one |
+| the interactive shell | the active one (`ibmicli env use NAME`) |
+| `deploy`, `pull`, `list`, `show`, `diff` | none: they only transfer files |
+
+The active environment is never used as a fallback for compiling: a task for a
+file outside any app needs `-var env=NAME`.
+
+The **current library** is the default object library, unless the app sets
+`objlib`. An empty current library or QGPL is refused as an object library, to
+avoid compiling there by mistake. `/copy` directives without a library search
+the current library, then the library list in order, as the compiler does.
+
+| Command | Does |
+| --- | --- |
+| `ibmicli env set NAME` | create or edit an environment (asks the questions shown in step 2) |
+| `ibmicli env ls` | show all environments and their libraries |
+| `ibmicli env refresh NAME` / `-all` | re-read the library list from IBM i |
+| `ibmicli env use NAME` | choose the active environment for `db` and the shell |
+| `ibmicli env` | show the active environment |
+
+### The project file: `ibmiproj.toml`
+
+One file at the repository root, committed to git, with no credentials. It
+contains:
+
+```toml
+# Apps: each one is a folder directly below the root
+[apps.MYAPP]
+env = "dev"                # environment from config.toml; "" = none
+objlib = "MYAPP_OBJ"       # object library; "" = the environment's current library
+
+[apps.SHARED]              # an app used only for reading (copybooks)
+env = ""
+objlib = ""
+
+# Folder names that differ from IBM i names (optional)
+[libraries]
+SOURCES = "MYAPP_SRC"      # folder SOURCES is library MYAPP_SRC
+[srcfile]
+RPG = "QRPGLESRC"          # folder RPG is source file QRPGLESRC
+
+# Repository tasks (optional), see "Tasks"
+[tasks.compile]
+steps = ["..."]
+```
+
+`ibmicli set-project` adds or changes an app without touching the rest
+(handwritten comments are replaced):
+
+```sh
+ibmicli set-project MYAPP -env dev -objlib MYAPP_OBJ -proj ibmiproj.toml
+ibmicli set-project SHARED -env - -objlib - -proj ibmiproj.toml   # '-' means empty
+```
+
+Things to know:
+
+- **A folder is an app only if it is declared** in `[apps.NAME]`. Other folders
+  (`docs/`...) are ignored, even if their subfolders look like IBM i names.
+- **Folder names are IBM i names** by default. `[libraries]` and `[srcfile]`
+  map exceptions for all apps; `[apps.NAME.libraries]` and
+  `[apps.NAME.srcfile]` do the same for one app and win over the global ones.
+- **Allowed keys in `[apps.NAME]`** are `env`, `objlib`, `srclib`,
+  `libraries`, `srcfile`. Anything else is an error, so a typo cannot silently
+  send a file to the wrong place.
+- Folder names with spaces or symbols must be quoted: `[apps."MY APP"]`.
+
+#### Apps with a single source library
+
+If an app uses only one source library, you can drop the library folder level
+with `srclib`:
+
+```text
+sources/
+  ibmiproj.toml
+  api/
+    src/                   source file QRPGLESRC (mapped below)
+      GIRI.sqlrpgle        member API_SRC/QRPGLESRC(GIRI)
+```
+
+```toml
+[apps.api]
+env = "api"
+objlib = ""
+srclib = "API_SRC"
+
+[apps.api.srcfile]
+src = "QRPGLESRC"
+```
+
+The folder after the app is the source file, and the library is always
+`srclib`. A `/copy` to another library (say `CGIDEV2/QRPGLESRC,X`) then needs
+its own app: `ibmicli set-project CGIDEV2 -env - -srclib CGIDEV2 -proj
+ibmiproj.toml`. `-srclib -` turns the app back into one with library folders.
+
+### When `-proj` is needed
+
+`-proj` always names the file, not its folder (`-proj ../ibmiproj.toml` when
+you are inside an app). VS Code finds it by walking up from the open file to
+the workspace root.
+
+| Command | Without `-proj` | With `-proj` |
+| --- | --- | --- |
+| `deploy` | `-lib` and `-file` required | taken from the file's path |
+| `pull` | downloads to `./LIBRARY/SOURCEFILE` | inside an app folder: into the app, with its folder mappings |
+| `list` | `-lib` and `-f` required | inside a source-file folder, both can be omitted |
+| `diff` | `-lib` and `-file` required | taken from each file's path |
+| `run`, `tasks` | global tasks only; values with `-var` | repository tasks too; values from the app |
+| `copy`, `symbols` | no `/copy` resolution across apps | copybooks found in all apps |
+| `db` | active environment, or `-lib` | inside an app folder, or with `-from`: the app's environment |
+| `status`, `deploy-build-changed`, `debug` | not available | required |
+| `show`, `env`, `set-conn`, `config`, `vscode`, `shell` | no project needed | |
+
+## Tasks and compiler errors
+
+Tasks are your build and utility commands. They live only in your files:
+`[tasks.NAME]` in `config.toml` (every repository) or in `ibmiproj.toml`
+(this repository, wins on the same name). ibmicli ships none. Run one with
+`ibmicli run NAME`; list them with `ibmicli tasks`; see the full syntax with
+`ibmicli tasks --guide`.
+
+```toml
+[tasks.compile]
+label = "Upload and compile"   # optional, shown in F6
+ext = ["sqlrpgle"]             # extensions it applies to; [] = all
+env = true                     # set up the environment before the first CL step
+steps = [
+  "ibmicli deploy -src {file} -lib {srclib} -file {srcfile}",
+  "CRTSQLRPGI OBJ({objlib}/{member}) SRCFILE({srclib}/{srcfile}) SRCMBR({member}) OBJTYPE(*PGM) OPTION(*EVENTF) DBGVIEW(*SOURCE)",
+]
+```
+
+Editing a task needs no reinstall: the CLI and VS Code read it each time.
+
+### Step types
+
+| Step starts with | Runs | Use for |
+| --- | --- | --- |
+| `ibmicli ...` | the same CLI | deploy, pull |
+| `sh: ...` | your local shell | `git`, scripts |
+| `job: ...` | CL via RCMD in the FTP job; changes survive | `ADDLIBLE`, `OVRPRTF` that later steps need |
+| `task: NAME` | the steps of another task, inlined | reusing tasks |
+| anything else | CL in a QShell child job, with messages | compiling |
+
+An unprefixed `echo hello` is sent to IBM i as CL: use `sh:` for local
+commands. Steps stop at the first failure.
+
+Why two kinds of CL: a normal step runs in a child job, which inherits the
+library list and returns full messages, but whatever it changes (library list,
+overrides, QTEMP) is lost when it ends. A `job:` step changes the FTP job
+itself, so the change lasts for the following steps, but only its result
+comes back, not its messages.
+
+### Placeholders
+
+| Placeholder | Value |
+| --- | --- |
+| `{member}` | member name, uppercase, no extension |
+| `{file}` | local path as given with `-src` |
+| `{dir}`, `{name}`, `{ext}` | local folder, file name, extension (lowercase) |
+| `{srctype}` | source type from the extension |
+| `{srclib}`, `{srcfile}` | source library and source file from the path |
+| `{env}` | the app's environment |
+| `{objlib}` | the app's object library, otherwise the current library |
+| `{curlib}` | the environment's current library |
+
+`-var NAME=VALUE` overrides any of them, and several pairs can follow one
+`-var`: `-var srclib=MYAPP_SRC srcfile=QRPGLESRC env=dev`. `env=NAME` also
+selects the environment. A task that uses no source placeholder needs no
+`-src`. A nested `ibmicli` step receives neither `-proj` nor `-var`, which is
+why the deploy step above passes `-lib {srclib} -file {srcfile}`.
+
+### Compiler errors
+
+With `OPTION(*EVENTF)`, the compiler writes its errors to
+`OBJLIB/EVFEVENT(MEMBER)`. ibmicli reads them and maps each one back to your
+local file, line and column, including inside copybooks and through SQL
+precompilation. The terminal and the VS Code Problems panel can open the
+location. A copybook that is not local is shown by its IBM i name.
+
+Do not add another `OPTION(...)` inside `COMPILEOPT` of `CRTSQLRPGI`: the
+duplicate parameter stops the RPG compiler (`CPD0042`).
+
+### Building what changed
+
+`deploy-build-changed` uploads and compiles the files git sees as changed. It
+needs a task for each source file, in `config.toml`:
+
+```toml
+[deploy-build-changed]
+QRPGLESRC = { pgm = "buildpgm", srv = "buildsrv" }   # NOMAIN -> srv, otherwise pgm
+QCLLESRC = "buildcl"
+```
+
+These tasks should compile only (no deploy step): the command uploads
+everything first, then builds service programs, then programs. It assumes one
+module per object and does not follow dependencies: a changed copybook does
+not rebuild the programs that include it.
+
+## VS Code
+
+```sh
+ibmicli vscode install
+```
+
+Then reload VS Code and **open the repository root**. The extension needs no
+npm and finds `ibmiproj.toml` by itself.
+
+- **F6** lists the tasks for the current file, compare with IBM i, run SQL,
+  debug, and project-wide deploy/build (which asks for confirmation).
+- **Ctrl+click / F12** on a `/copy` opens it, offering to download it if
+  missing.
+- Completion, hover, go to definition, signatures and Outline cover RPG
+  declarations, including those in copybooks.
+- Compare and SQL results are shown in memory; no files are written.
+
+The shortcut is `tasks_key` in `config.toml` (default `f6`); changing it needs
+`ibmicli vscode install`, changing tasks does not. Set `ibmicli.executable` in
+VS Code settings if the CLI is not found.
+
+Companion extensions:
+
+| Extension | Installed by | Purpose |
+| --- | --- | --- |
+| IBM i Languages (`barrettotte.ibmi-languages`) | `vscode install` | syntax coloring for RPGLE, CLLE, DDS, CL |
+| IBM i Debug (`IBM.ibmidebug`) | `vscode install` | batch and service-entry-point debugging |
+| RPGLE (`halcyontechltd.vscode-rpgle`) | `vscode install -extra` | linter and language tools, with its own Outline |
+| Code for IBM i (`halcyontechltd.code-for-ibmi`) | `vscode install -extra` | browse remote libraries and members |
+
+None of the optional ones is required. When the RPGLE extension is installed,
+the ibmicli Outline turns itself off to avoid showing everything twice.
 
 ## Command reference
 
-Use `ibmicli --help` or `ibmicli COMMAND --help` for all options. Configuration
-and usage errors exit with 2. Successful operations exit with 0; operational
-failures generally exit with 1. The exceptions and comparison meanings are
-listed below. `--json` keeps stdout machine-readable; diagnostics use stderr.
-
-Examples below assume the `sources` root, the layout above, a configured
-`dev` environment, and the tasks shown later. Transfer and build examples
-use `-n` to display their plans. Remove it to perform the operation.
-Commands without `-n` are either read operations or explicit setup actions.
+`ibmicli --help` and `ibmicli COMMAND --help` list every option. Exit codes:
+`0` done, `1` operation failed, `2` usage or configuration error. With
+`--json`, stdout contains only JSON and messages go to stderr. Examples below
+assume the repository from the walkthrough; `-n` shows the plan without doing
+anything.
 
 ### deploy
 
-Upload local files to source members. Choose exactly one of `-src FILE`,
-`-srcs FILE1,FILE2` or `-all` (visible files in the current folder). A member
-is the uppercase filename stem, limited to ten characters. SRCTYPE defaults
-to the uppercase extension; `-t TYPE` overrides it. Explicit `-lib/-file`
-win over project mapping. Existing remote members are overwritten.
+Upload local files to members. Choose one of `-src FILE`, `-srcs FILE1,FILE2`
+or `-all` (files in the current folder). The member name is the file name
+without extension, uppercase, at most ten characters; the source type is the
+extension (`-t TYPE` overrides it). Existing members are overwritten.
 
 ```sh
 ibmicli deploy -src MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle -proj ibmiproj.toml -n
-ibmicli deploy -src MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle -lib MYAPP_SRC -file QRPGLESRC -t SQLRPGLE -n
+ibmicli deploy -src HELLO.sqlrpgle -lib MYAPP_SRC -file QRPGLESRC -n
 ```
-
-Prints `DRY`, `OK`, `SKIP` or `FAIL` with local and remote names. Exit 0 for all
-transferred, 1 if any file was skipped or failed.
 
 ### pull
 
-Download members. Choose `-mbr`, comma-separated `-mbrs`, or `-all`; alternatively
-use `-path LIBRARY/FILE,MEMBER`. `-o FOLDER` sets the exact destination.
-Extensions come from `[pull_ext]` or the source-file defaults, unless included
-in a requested member name. Existing local files are skipped unless `-f`.
+Download members. Choose `-mbr`, `-mbrs A,B` or `-all` with `-lib`/`-file`, or
+`-path LIBRARY/FILE,MEMBER` (the format printed by `list`). `-o FOLDER` sets
+the destination; otherwise see [When `-proj` is needed](#when--proj-is-needed).
+Existing files are skipped unless `-f`. Extensions come from `[pull_ext]` in
+`config.toml` or from the source file name.
 
 ```sh
 ibmicli pull -path MYAPP_SRC/QRPGLESRC,HELLO -n
-ibmicli pull -lib MYAPP_SRC -file QRPGLESRC -mbr HELLO -o MYAPP/MYAPP_SRC/QRPGLESRC -f -n
-ibmicli pull -lib MYAPP_SRC -file QRPGLESRC -all -n
+ibmicli pull -lib MYAPP_SRC -file QRPGLESRC -all -proj ../ibmiproj.toml -n
 ```
-
-Prints remote-to-local result lines. Exit 0 if all requested transfers succeed,
-1 for skipped or failed transfers. With explicit members, dry-run is offline;
-`-all -n` still reads the remote member list before showing destinations.
 
 ### list
 
-List a source file's members, or all files in a library with `-f '*ALL'`.
-Inside a project source-file folder, `-proj` lets you omit `-lib/-f`.
-This command is read-only and has no dry-run option.
+List the members of a source file, or of every source file with `-f '*ALL'`.
+One `LIBRARY/FILE,MEMBER` per line, ready for `pull -path` or `show`.
 
 ```sh
 ibmicli list -lib MYAPP_SRC -f QRPGLESRC
 ibmicli list -lib MYAPP_SRC -f '*ALL'
 ```
 
-Writes one `LIBRARY/FILE,MEMBER` per stdout line. Empty lists can exit 0.
-For `*ALL`, unreadable files are skipped; exit 1 means every listed file
-failed, or the library list could not be read.
-
 ### show
 
-Read members to stdout with no headings. Accepts comma or parenthesized
-member syntax. `-edit nano` and `-edit vsc` open temporary read-only copies.
-There is no dry-run option.
+Print members to stdout. `-edit vsc` or `-edit nano` opens a read-only
+temporary copy.
 
 ```sh
 ibmicli show MYAPP_SRC/QRPGLESRC,HELLO
-ibmicli show 'MYAPP_SRC/QRPGLESRC(HELLO)'
-ibmicli show MYAPP_SRC/QRPGLESRC,HELLO -edit vsc
+ibmicli show 'MYAPP_SRC/QRPGLESRC(HELLO)' -edit vsc
 ```
-
-Exit 0 when all members are read, 1 for failed reads or editor failures.
-Unsupported editor names exit 2.
 
 ### diff
 
-Compare files in memory as an upload would encode them. Trailing blanks and
-empty final lines are ignored. Remote lines are `-`, local lines `+`.
-`-U N` sets context; `--json` returns member content and comparison results.
+Compare local files with their members, in memory, as a deploy would send
+them (trailing blanks and empty final lines are ignored). `-` is IBM i, `+` is
+local. `-U N` sets the context lines. Exit 1 if anything differs.
 
 ```sh
-ibmicli diff MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle -proj ibmiproj.toml -n
-ibmicli diff MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle -lib MYAPP_SRC -file QRPGLESRC -U 5 -n
+ibmicli diff MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle -proj ibmiproj.toml
 ```
-
-Prints a unified diff or `OK` for equal content. Exit 0 means all equal;
-1 means different, missing or unreadable. Dry-run only prints member mappings.
 
 ### status
 
-Requires `-proj`. Compare known source-file folders below a source-file folder,
-library, app or repository root. `-remote` lists remote-only members; `-v`
-also shows equal files.
+Compare every known source file below a folder (default: the current one)
+with IBM i. Prints `DIFF` for changed files and `LOCAL` for files missing on
+IBM i; `-remote` also lists members missing locally (`IBMI`), `-v` shows equal
+files too. Requires `-proj`.
 
 ```sh
-ibmicli status -proj ibmiproj.toml -n
-ibmicli status MYAPP/MYAPP_SRC/QRPGLESRC -remote -v -proj ibmiproj.toml -n
+ibmicli status -proj ibmiproj.toml
+ibmicli status MYAPP/MYAPP_SRC/QRPGLESRC -remote -proj ibmiproj.toml
 ```
-
-Prints `DIFF` with added/removed counts, `LOCAL` for local-only files and,
-with `-remote`, `IBMI` for remote-only members, followed by a summary.
-Exit 1 means local differences, missing remote counterparts or read failures.
-Remote-only members alone do not make status fail. Dry-run lists folders.
 
 ### copy
 
-Resolve directives across project apps. `-from SOURCE` supplies context.
-A single directive downloads by default; `-all` requires explicit `-pull`.
-`-no-pull` reads only; `-open` opens resolved files in VS Code.
+Find the local file of a `/copy`, downloading it if needed. `-from SOURCE`
+gives the context; `-all` handles every directive in it (add `-pull` to
+download the missing ones); `-no-pull` only reads; `-open` opens the files in
+VS Code.
 
 ```sh
-ibmicli copy MYAPP_SRC/QCPYSRC,CONSTS -from MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle -no-pull -proj ibmiproj.toml -n
-ibmicli copy -from MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle -all -pull -proj ibmiproj.toml -n
+ibmicli copy -from MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle -all -no-pull -proj ibmiproj.toml
+ibmicli copy -from MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle -all -pull -proj ibmiproj.toml
 ```
-
-Prints resolved paths or reasons for missing destinations. `--json` returns
-copy locations and errors. Exit 1 for unresolved or missing copies; missing
-files planned in dry-run do not count as transfer failures.
 
 ### symbols
 
-Read free-format RPG declarations, following readable copies recursively.
-`-copies` excludes root declarations; `-local` excludes copies. `-k KIND`
-filters declaration kind. `--stdin` reads the root text from an editor buffer.
-This command never transfers files and has no dry-run option.
+List free-format RPG declarations, following copybooks. `-local` excludes
+copybooks, `-copies` shows only them, `-k KIND` filters by kind, `--stdin`
+reads the source from stdin. Never transfers files.
 
 ```sh
 ibmicli symbols MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle -proj ibmiproj.toml
-ibmicli symbols MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle -local --json
 ```
 
-Prints kind, name, type and source location, or JSON with `symbols` and
-`problems`. Unreadable copies do not hide other symbols. Text mode exits 1
-when copies have problems; JSON mode returns 0 with those problems in its
-payload. Invalid option combinations or a missing root file exit 2.
+### run and tasks
 
-### run
-
-Run only explicitly configured tasks, through `run NAME`. `-src FILE` is
-required only when the steps use source values. `-var NAME=VALUE` overrides
-project values; multiple pairs can follow it. `-v` displays complete CL output.
+`run NAME` executes a task (see [Tasks](#tasks-and-compiler-errors)); `-v`
+prints the full compiler listing. `tasks` lists them, `tasks NAME` shows the
+steps, `tasks --guide` explains the syntax.
 
 ```sh
+ibmicli tasks -proj ibmiproj.toml
 ibmicli run compile -src MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle -proj ibmiproj.toml -n
-ibmicli run compile -src MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle -var srclib=MYAPP_SRC srcfile=QRPGLESRC objlib=MYAPP_OBJ env=dev -n
+ibmicli run compile -src HELLO.sqlrpgle -var srclib=MYAPP_SRC srcfile=QRPGLESRC env=dev -n
 ```
-
-Prints a task heading, expanded steps and final result. Stops on the first
-failed step and exits 1; invalid tasks or missing values exit 2. Dry-run prints
-CLI and local shell steps without starting them.
-
-### tasks
-
-List configured tasks in definition order. A task name shows its steps;
-`-e EXT` filters by source extension. `--guide` explains the complete syntax.
-
-```sh
-ibmicli tasks -e sqlrpgle -proj ibmiproj.toml
-ibmicli tasks compile -proj ibmiproj.toml
-ibmicli tasks --guide
-```
-
-Prints names, labels, filters and definition problems. `--json` supplies the
-extension menu. An empty text list exits 1; an empty JSON list exits 0.
-Unknown task names exit 2. Editing a task requires no CLI or extension rebuild.
 
 ### deploy-build-changed
 
-Requires `-proj` and Git. Includes changes from HEAD and untracked files below
-the current folder. `--since REF` uses the merge base and includes committed
-changes since branching. `--json` returns a plan without running it.
+Upload and compile the files changed since the last commit (plus untracked
+files) below the current folder. `--since REF` counts from the point where
+the branch left `REF`. `--json` prints the plan without running it. Requires
+`-proj` and the `[deploy-build-changed]` table described above.
 
 ```sh
 ibmicli deploy-build-changed -proj ibmiproj.toml -n
-ibmicli deploy-build-changed --since HEAD -proj ibmiproj.toml -n
-ibmicli deploy-build-changed --json -proj ibmiproj.toml
+ibmicli deploy-build-changed --since main -proj ibmiproj.toml -n
 ```
 
-Uploads all selected sources before building service programs, then programs.
-Build task names come from `[deploy-build-changed]` in global configuration.
-Unmapped source files upload only. NOMAIN distinguishes service programs
-assuming one module per object. Deleted local files leave remote members
-untouched. Failed uploads are not compiled; other files continue.
-
-Prints the plan, ignored/skipped paths and results. Exit 1 for skipped or
-failed files; 0 for success or no changes. The JSON plan itself exits 0 and
-includes skipped paths. Until changes are committed, rerunning uploads them
-again; there is no upload ledger.
+Until you commit, running it again uploads the same files again.
 
 ### debug
 
-Requires `-proj`. Prepare offline launch settings for a source program.
-`-sep` omits the batch submission command; `--json` includes credentials for
-the extension. Never redirect or log that launch JSON.
+Prepare the settings to debug a program with IBM's extension; VS Code runs it
+from F6. `-sep` prepares a service entry point instead of a batch job.
+Requires `-proj`. Two keys in `config.toml` (asked by `set-conn`):
+
+- `debug_host`: the IBM i **host name** covered by its TLS certificate, not
+  the IP address.
+- `debug_batch`: the command that submits the program, for example
+  `SBMJOB CMD(CALL PGM({objlib}/{member})) JOBQ(QSYS/QSYSNOMAX) CPYENVVAR(*YES)`.
+
+Compile with `DBGVIEW(*SOURCE)` or `*ALL`.
 
 ```sh
 ibmicli debug MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle -proj ibmiproj.toml
-ibmicli debug MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle -sep -proj ibmiproj.toml
 ```
-
-Normal output shows environment, program, module, hostname and submission
-command, without a password. The command does not connect and has no `-n`
-option. Invalid configuration exits 2.
-
-Configure `debug_host` as a TLS certificate hostname, such as
-`ibmi.example.com`. `debug_batch` is CL with task placeholders, for example
-`SBMJOB CMD(CALL PGM({objlib}/{member})) JOBQ(QSYS/QSYSNOMAX) MSGQ(*USRPRF)
-CPYENVVAR(*YES)`. Both belong before any TOML table. The IBM extension performs
-actual debugging. Compile with `DBGVIEW(*SOURCE)` or `*ALL`.
 
 ### db
 
-Run SQL through ODBC. `-lib LIB1,LIB2` supplies a library list; otherwise use
-the app environment with `-proj`, or the active environment. `--json` emits
-one record per statement; `--csv` emits headers and data. `--out FILE`
-overwrites the requested result file only after a successful query.
+Run SQL through ODBC. Without SQL text it opens an `sql>` prompt. The library
+list is `-lib LIB1,LIB2` if given; with `-proj`, that of the app you are in
+(or of the `-from` file); otherwise the active environment's.
 
 ```sh
-ibmicli db "select 1 from sysibm.sysdummy1" -n
-ibmicli db -from MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle -line 5 --json -proj ibmiproj.toml -n
-ibmicli db --out result.csv "select 1 from sysibm.sysdummy1" -n
+ibmicli db "select * from customers fetch first 5 rows only"
+cd MYAPP && ibmicli db -proj ../ibmiproj.toml
+ibmicli db -from MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle -line 120 --var CUST="'C001'" -proj ibmiproj.toml
+ibmicli db --check
 ```
 
-Without SQL, a terminal opens `sql>`; redirected stdin is read as one statement.
-Direct SQL remains one statement so procedure bodies can contain semicolons.
-With `-from`, supplied source text is split into statements; `-line N` selects
-the statement at that source line. RPG extraction removes `exec sql` and
-SELECT/VALUES host-variable INTO, extracts cursor queries, and turns
-`set :host = expression` into `values expression`. Supply remaining host
-variables as SQL with `--var NAME=VALUE`, including quotes for strings.
+- **Read-only by default.** `--write` allows changes, committed immediately.
+  `--write --tx` uses a transaction: only typing `commit` at the prompt
+  confirms; exiting, closing the terminal or losing the connection rolls back.
+  Tables need journaling for `--tx` (`SQL7008` otherwise).
+- **Output**: a table by default, `--json` (one line per statement) or
+  `--csv`. `--out FILE` writes the result to a file. There is no row limit:
+  add `fetch first N rows only`.
+- **From a source**: `-from FILE -line N` takes the `exec sql` at that line,
+  drops `INTO`, and replaces host variables with the `--var NAME=VALUE` values
+  (written as SQL, quotes included).
+- **At the prompt**: Enter adds a line; a final `;`, an empty line or
+  Esc+Enter runs. Up recalls whole statements; TAB completes keywords and
+  table names.
 
-The connection is read-only by default. `--write` explicitly permits changes
-and commits each statement immediately. `--write --tx` enables a transaction;
-only `commit` in the prompt confirms changes. `rollback`, exit, Ctrl-D,
-terminal closure and connection loss discard uncommitted work. A single
-statement run with `--tx` also ends in rollback. Tables need journaling.
-
-Enter adds a line; a final `;`, an empty final line or Esc+Enter executes the
-block. Up recalls complete statements. TAB completes keywords and known
-tables. The last 20 distinct statements are retained in `sql_history`.
-
-No row limit is imposed; add `fetch first N rows only` to SQL when needed.
-JSON makes duplicate columns unique (`NAME_2`), trims CHAR padding and keeps
-inexact decimal-to-float conversions as strings. CSV uses empty fields for
-NULL. Text output includes a row count on stderr.
-
-Exit 1 for connection, statement or export failures; usage and missing driver
-configuration exit 2. The interactive prompt reports individual query errors
-and continues; normal prompt exit returns 0. `db --check` reports installation
-and connectivity and exits 1 for failed checks.
-
-### env
-
-Manage environments with `set`, `use`, `refresh` and `ls`. `set --no-test`
-skips remote testing; `refresh -all` updates all cached lists. `-q` prints only
-the active name for shell prompts.
+### set-conn, set-project, env, config
 
 ```sh
-ibmicli env ls
-ibmicli env -q
-ibmicli env use dev
-```
-
-Prints setup commands, `CUR` and `USR` libraries. Setup actions write global
-configuration. Exit 1 for absent active environments, empty listings or
-failed refreshes; missing names/configuration can exit 2.
-
-### set-conn
-
-Prompt for connection and optional debug settings. Existing environments,
-tasks, mappings and the task shortcut are preserved. `-f` skips the replacement
-confirmation; `--no-test` skips FTP, debug TLS and ODBC probes.
-
-```sh
-ibmicli set-conn --no-test
-ibmicli set-conn -f --no-test
-```
-
-Writes global configuration with mode 600 and prints its path. Saves no
-default tasks. Refusing replacement exits 0; refusing to save after a failed
-FTP test exits 1. Missing ODBC components are explained without blocking FTP.
-
-### set-project
-
-Add or edit one app in the explicitly named project file. `-env NAME` selects
-a configured environment; `-objlib LIBRARY` overrides its current library.
-`-` clears either setting. With neither option, prompt for both values.
-
-```sh
+ibmicli set-conn                 # connection settings; --no-test skips the checks
 ibmicli set-project MYAPP -env dev -objlib MYAPP_OBJ -proj ibmiproj.toml
-ibmicli set-project SHARED -env - -objlib - -proj ibmiproj.toml
+ibmicli env ls                   # see "Environments"
+ibmicli config                   # effective settings, without the password
 ```
 
-Prints the app folder, environment and object destination. Creates a missing
-TOML file, preserving other apps, mappings and tasks; handwritten comments
-are replaced. It creates neither app directories nor VS Code task files.
-Exit 0 on success, 2 for invalid names or configuration.
-
-### config
-
-Show effective global settings, defaults, environments and tasks, excluding
-the password value. `-s` limits detail.
-
-```sh
-ibmicli config
-ibmicli config -s
-```
-
-Prints connection/encoding information and configured mappings. Exit 0 for a
-valid configuration, 2 if it cannot be loaded.
+`set-conn` keeps your environments, tasks and other settings when it rewrites
+the file.
 
 ### vscode
 
-Build and install the bundled extension. Required companions supply IBM i
-languages and IBM debug. `-extra` also installs the RPGLE extension and Code
-for IBM i; `-only` installs only ibmicli. `uninstall` leaves third-party
-extensions installed. The companion extensions are described below.
-
 ```sh
+ibmicli vscode install           # install or update the extension and its companions
+ibmicli vscode install -extra    # also RPGLE and Code for IBM i
+ibmicli vscode install -only     # only the ibmicli extension
 ibmicli vscode status
-ibmicli vscode install
-ibmicli vscode install -only
+ibmicli vscode uninstall         # removes only the ibmicli extension
 ```
-
-Prints installed versions, task shortcut and binding conflicts. Reload VS Code
-after installation. Status exits 1 when VS Code is absent; installation can
-exit 1 for companion failures. Invalid actions and extension command failures
-exit 2.
 
 ### shell
 
-Start the interactive shell, also opened by `ibmicli` without arguments.
-The same commands, options and help apply inside it; omit the `ibmicli` prefix.
-The FTP session is shared until exit. Unknown command names, pipes and
-redirections go to the local shell; `cd` updates the working folder.
+`ibmicli` with no arguments opens an interactive shell: the same commands
+without the `ibmicli` prefix, over a single FTP connection kept open until
+you exit. The prompt shows the active environment. Unknown commands, pipes
+and redirections go to your local shell.
 
-```sh
-ibmicli shell
-ibmicli
-```
+## Scope and limits
 
-The prompt shows the active environment. Use `help`, `help pull`, or
-`pull --help`; `exit`, `quit` and Ctrl-D leave. Ctrl-C cancels the current
-line. Command failures are reported without leaving the shell; normal shell
-exit returns 0.
+FTP handles sources and CL; only `db` uses ODBC. ibmicli does not replace a
+5250 session or the IBM debugger, and its RPG symbol reader is not a compiler.
 
-## Tasks and compiler diagnostics
+ibmicli is young:
 
-Tasks live only in user files: global `[tasks.NAME]` in `config.toml`, or
-repository `[tasks.NAME]` in the explicit `ibmiproj.toml`. Repository definitions
-win when names match. A task is invoked only as `ibmicli run NAME`, including
-when its name matches a CLI command.
+- It has been used on one system (IBM i 7.5) from macOS. Windows and Linux are
+  untested, and there is no automated test suite yet.
+- FTP is not encrypted (no FTPS), and the password is stored in plain text in
+  `config.toml`, readable only by you.
+- Uploads go through `remote_charset` (ISO-8859-1 by default). A character it
+  cannot represent, such as `€`, becomes `?` and is reported.
+- The configuration format is recent and may still change.
 
-Add this repository task for an upload followed by SQLRPGLE module compilation:
-
-```toml
-[tasks.compile]
-label = "Compile SQLRPGLE module"
-ext = ["sqlrpgle"]
-env = true
-steps = [
-  "ibmicli deploy -src {file} -lib {srclib} -file {srcfile}",
-  "CRTSQLRPGI OBJ({objlib}/{member}) SRCFILE({srclib}/{srcfile}) SRCMBR({member}) OBJTYPE(*MODULE) OPTION(*EVENTF) DBGVIEW(*SOURCE)",
-]
-```
-
-`ext = []` accepts all extensions. `label` is optional. `env = true` sets up
-the selected environment immediately before the first CL or `job:` step.
-Only tasks that use source placeholders require `-src`. A task with no
-environment-dependent values and no environment setup can run standalone.
-
-| Step | Execution |
-| --- | --- |
-| `ibmicli ...` | The same CLI application; no second implementation of deploy or pull |
-| `sh: ...` | Local shell in the task's starting folder |
-| `job: ...` | RCMD in the persistent FTP job; library-list changes survive |
-| `task: NAME` | Replace with that task's steps before execution |
-| No prefix | CL in a QShell child job, returning status and messages |
-
-An unprefixed `echo hello` goes to IBM i as CL; use `sh:` for local commands.
-Included tasks use the outer task's source, environment and extension filter.
-Inclusion cycles are refused with their chain. Steps stop at the first failure.
-
-QShell inherits the FTP library list, but each CL child has its own QTEMP and
-does not inherit file overrides. Use `job:` for persistent library-list setup;
-normal CL for compilation and its messages. `job:` returns status only.
-
-| Placeholder | Value |
-| --- | --- |
-| `{member}` | Uppercase member name without extension |
-| `{file}` | Local path as supplied with `-src` |
-| `{dir}` | Local source folder |
-| `{name}` | Local filename including extension |
-| `{ext}` | Local extension, lowercase |
-| `{srctype}` | Member source type from the extension mapping |
-| `{srcfile}` | Project source-file folder mapping |
-| `{srclib}` | Project library folder mapping |
-| `{env}` | App environment name |
-| `{objlib}` | App object library, otherwise environment current library |
-| `{curlib}` | Environment current library |
-
-`-var NAME=VALUE` overrides these values. `env=dev` also selects setup and the
-current library. Without a usable project, supply every value the task needs;
-folder names alone and the active environment are not used as fallbacks.
-CLI and shell placeholder values are quoted so paths with spaces remain intact.
-A nested `ibmicli` step does not inherit `-proj` or `-var`; pass `-lib {srclib}
--file {srcfile}` to deploy and pull steps explicitly.
-
-`OPTION(*EVENTF)` writes compiler diagnostics to `OBJLIB/EVFEVENT(MEMBER)`.
-ibmicli uses a changed event timestamp to avoid stale errors, then maps source
-and copy lines to `file:line:column`. SQL precompiler expansions are mapped
-back to the original source. The terminal and VS Code Problems can open the
-location. A copy absent locally is reported by its remote member name.
-For CRTSQLRPGI, do not combine `OPTION(*EVENTF)` with an additional `OPTION`
-inside `COMPILEOPT`; duplicate parameters prevent RPG compilation.
-
-For bulk builds, define tasks that compile without a deploy step, then map
-the source file in global configuration:
-
-```toml
-[deploy-build-changed]
-QRPGLESRC = { pgm = "buildpgm", srv = "buildsrv" }
-QCLLESRC = "buildcl"
-```
-
-A string selects the same task for all members of that source file. A table
-selects `srv` for NOMAIN and `pgm` otherwise. Define the named tasks yourself;
-missing task definitions are errors before any uploads.
-
-## VS Code workflow
-
-Install VS Code and run `ibmicli vscode install`, then reload its window.
-Open the repository root. The bundled extension needs no npm tooling.
-
-- F6 lists applicable tasks, debug commands, comparison, SQL and project-wide
-  deploy/build. Bulk deploy/build requires confirmation of the CLI plan.
-- Ctrl+click, F12 or Cmd/Ctrl+F12 on a copy opens its local file, confirming a
-  download when missing. A separate command downloads all missing copies.
-- Completion, hover, definition navigation and signatures include recursive
-  copies and structure subfields.
-- Outline follows unsaved text and defers to Halcyon's provider in `auto` mode.
-- Batch and SEP debugging use `IBM.ibmidebug`. The password stays in memory;
-  tracing is disabled. Breakpoints refer to the remote object's source view.
-- Cursor or selected SQL runs read-only and displays results beside the editor.
-- Member comparison uses a read-only document held in memory.
-
-`tasks_key` in global configuration controls the menu shortcut, default F6.
-Changing it requires `ibmicli vscode install`; changing tasks does not.
-The installer reports conflicting extension bindings. Set
-`ibmicli.executable` if the CLI cannot be found automatically.
-
-### Companion extensions and Code for IBM i
-
-| Extension | Installed by | Purpose |
-| --- | --- | --- |
-| IBM i Languages (`barrettotte.ibmi-languages`) | `ibmicli vscode install` | Syntax coloring for RPGLE, CLLE, DDS and CL |
-| IBM i Debug (`IBM.ibmidebug`) | `ibmicli vscode install` | Batch and service-entry-point debugging |
-| RPGLE (`halcyontechltd.vscode-rpgle`) | `ibmicli vscode install -extra` | RPGLE linter and language tools, including its own Outline |
-| Code for IBM i (`halcyontechltd.code-for-ibmi`) | `ibmicli vscode install -extra` | Browse remote IBM i libraries and members from VS Code |
-
-Code for IBM i uses a direct connection to IBM i. It is optional: ibmicli
-works with local source files and transfers members through its own FTP
-connection. The ibmicli extension and IBM i Debug work without Code for IBM i.
-
-To install both optional Halcyon extensions as well as the standard companions:
-
-```sh
-ibmicli vscode install -extra
-```
-
-Run `ibmicli vscode status` to see which extensions are installed. Remove an
-unused companion through VS Code; `ibmicli vscode uninstall` removes only
-the ibmicli extension.
+ibmicli does not write logs or diff files. Build output goes to the terminal;
+comparisons stay in memory. The only files it writes are the sources you
+download, its own configuration, the `sql>` history, and `db --out FILE`.
 
 ## Common problems
 
-| Message or symptom | Action |
+| Message or symptom | What to do |
 | --- | --- |
 | `configuration not found` | Run `ibmicli set-conn` |
-| `missing library and source file` | Supply `-lib LIBRARY -file SRCFILE`; for app files, `-proj FILE` supplies them |
-| `task ... is missing {srclib}, ...` | Supply `-var` values; for app files, pass the repository TOML with `-proj` |
+| `missing library and source file` | Pass `-proj FILE` for a file inside an app, or `-lib`/`-file` |
+| `task ... is missing {srclib}, ...` | Pass `-proj FILE`, or the values with `-var` |
+| Pulled files end up outside the app | Run `pull` from inside the app folder |
 | `unknown keys` in an app | Use only `env`, `objlib`, `srclib`, `libraries`, `srcfile` in `[apps.NAME]` |
-| `environment ... does not exist` | Define it with `env set NAME`, or correct the app's `env` |
-| Unknown object library | Set app `objlib`, supply a task override, or refresh a valid environment current library |
-| Copy missing locally | Inspect `copy -all -no-pull`, then use `copy -all -pull` with `-from` and `-proj` |
-| Project works in terminal but not VS Code | Open the repository root; discovery stops at the workspace boundary |
-| `driver ... is not installed`, pyodbc import failure | Run `db --check` and follow its OS-specific instructions; FTP remains usable |
-| `db is read-only` | Use explicit `--write` for intended modifications; add `--tx` for a transaction |
-| `SQL7008` with `--tx` | Journal the table, or use immediate writes without `--tx` if intended |
-| Compiler errors have no source locations | Add `OPTION(*EVENTF)` to the build task; verify its object library/member |
-| `CPD0042` before RPG compilation | Remove duplicate `OPTION` from `COMPILEOPT` |
-| SEP TLS failure | Use a certificate-covered hostname in `debug_host`, not the FTP IP |
-| F6 runs a different command | Resolve the reported keybinding conflict or change `tasks_key` and reinstall |
-| Extension still uses old text or behavior | Reinstall it and run `Developer: Reload Window` |
-| Accents or symbols arrive incorrectly | Check local UTF-8, remote character set and server CCSID; uploads use FTP line conversion |
+| `environment ... does not exist` | Create it with `ibmicli env set NAME`, or fix the app's `env` |
+| Unknown object library | Set `objlib` for the app, or `ibmicli env refresh NAME` |
+| Copybook missing locally | `ibmicli copy -from FILE -all -pull -proj ibmiproj.toml` |
+| Works in the terminal but not in VS Code | Open the repository root in VS Code |
+| `driver ... is not installed` | Run `ibmicli db --check` and follow its instructions |
+| `db is read-only` | Add `--write` (and `--tx` for a transaction) |
+| `SQL7008` with `--tx` | Journal the table, or use `--write` without `--tx` |
+| Compiler errors without file and line | Add `OPTION(*EVENTF)` to the compile task |
+| `CPD0042` before RPG compilation | Remove the extra `OPTION` from `COMPILEOPT` |
+| Service entry point debug fails with a TLS error | Set `debug_host` to the host name, not the IP |
+| F6 does something else | Resolve the conflict reported by `vscode install`, or change `tasks_key` |
+| Accented characters or `£` arrive wrong | Check `ccsid` and `remote_charset` in `config.toml` |
+
+## Development
+
+```sh
+uv sync                        # development environment in .venv
+uv tool install --editable .   # the installed ibmicli uses this checkout
+```
+
+Python changes are active immediately. Run `./deploy-local` after changing
+`pyproject.toml`, and `ibmicli vscode install` after changing the extension.
 
 ## License
 
