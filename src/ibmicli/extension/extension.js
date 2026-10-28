@@ -446,6 +446,11 @@ const DEBUG_ITEMS = [
 /* F6 actions for the project rather than the open file. */
 const PROJECT_ITEMS = [
   {
+    label: 'clear problems',
+    description: 'remove the last build diagnostics from Problems and the editor',
+    command: 'ibmicli.clearProblems'
+  },
+  {
     label: 'deploy-build-changed',
     description: 'upload and build Git-changed sources, with confirmation',
     command: 'ibmicli.deployBuildChanged'
@@ -503,6 +508,50 @@ function runAsTask(title, args, document) {
   vscode.tasks.executeTask(task).then(undefined, (error) => {
     vscode.window.showErrorMessage(`ibmicli: could not start the task: ${error.message}`);
   });
+}
+
+/* Extensions cannot delete task diagnostics: VS Code owns them. A task with
+ * the same matcher that reports nothing makes VS Code remove those from the
+ * previous run. It starts no process and does not contact IBM i. */
+async function clearProblems() {
+  const editor = vscode.window.activeTextEditor;
+  const folder = (editor && vscode.workspace.getWorkspaceFolder(editor.document.uri))
+    || (vscode.workspace.workspaceFolders || [])[0];
+  if (!folder) {
+    vscode.window.showInformationMessage('ibmicli: no workspace folder, so there are no task problems to clear.');
+    return;
+  }
+  const execution = new vscode.CustomExecution(async () => {
+    const closed = new vscode.EventEmitter();
+    return {
+      onDidWrite: new vscode.EventEmitter().event,
+      onDidClose: closed.event,
+      open: () => closed.fire(0),
+      close: () => {}
+    };
+  });
+  const task = new vscode.Task(
+    { type: 'ibmicli', args: '' },
+    folder,
+    'clear problems',
+    'ibmicli',
+    execution,
+    ['$ibmicli']
+  );
+  /* Dedicated and hidden: the last compiler output stays in its terminal. */
+  task.presentationOptions = {
+    reveal: vscode.TaskRevealKind.Never,
+    panel: vscode.TaskPanelKind.Dedicated,
+    focus: false,
+    echo: false,
+    showReuseMessage: false,
+    close: true
+  };
+  try {
+    await vscode.tasks.executeTask(task);
+  } catch (error) {
+    vscode.window.showErrorMessage(`ibmicli: could not clear problems: ${error.message}`);
+  }
 }
 
 /* Reuse the dedicated terminal, changing its working folder before commands whose scope depends on it. */
@@ -1458,6 +1507,8 @@ function activate(context) {
       }
     })
   );
+
+  subscribe(vscode.commands.registerCommand('ibmicli.clearProblems', clearProblems));
 
   subscribe(
     vscode.commands.registerCommand('ibmicli.refresh', () => {

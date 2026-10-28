@@ -18,6 +18,7 @@
     "onCommand:ibmicli.deployBuildChanged",
     "onCommand:ibmicli.diffRemote",
     "onCommand:ibmicli.runSql",
+    "onCommand:ibmicli.clearProblems",
     "workspaceContains:**/ibmiproj.toml"
   ],
   "contributes": {
@@ -63,12 +64,25 @@
         "category": "ibmicli"
       },
       {
+        "command": "ibmicli.clearProblems",
+        "title": "ibmicli: clear compiler problems",
+        "category": "ibmicli",
+        "icon": "$(clear-all)"
+      },
+      {
         "command": "ibmicli.refresh",
         "title": "ibmicli: refresh copy symbols",
         "category": "ibmicli"
       }
     ],
     "menus": {
+      "view/title": [
+        {
+          "command": "ibmicli.clearProblems",
+          "when": "view == workbench.panel.markers.view",
+          "group": "navigation"
+        }
+      ],
       "editor/context": [
         {
           "command": "ibmicli.runSql",

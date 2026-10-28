@@ -327,7 +327,8 @@ Now in any source file:
 
 - **F6** opens the menu: `compile`, compare with IBM i, run SQL, debug.
 - **F12** on a `/copy` opens the copybook.
-- Compiler errors appear in the **Problems** panel.
+- Compiler errors appear in the **Problems** panel. They stay until the next
+  compile; `clear problems` in the F6 menu removes them.
 
 ### Your daily routine
 

@@ -51,6 +51,9 @@ Tasks use a shared terminal panel and the `$ibmicli` problem matcher.
 Compilations with `OPTION(*EVENTF)` produce file and line diagnostics in
 Problems, including copies available locally. Each run replaces the previous
 run's diagnostics. Outside a workspace, results remain in the terminal.
+To remove them without compiling again, use the clear button in the
+Problems panel title bar, choose `clear problems` in the F6 menu, or run
+`ibmicli: clear compiler problems` from the Command Palette.
 
 The extension saves the source before running a task by default. Set
 `ibmicli.saveBeforeRun` to false to disable this.
