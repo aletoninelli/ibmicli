@@ -42,6 +42,9 @@ itself, with no npm and no extra setup. It adds:
 - **Compile with F6.** Your compile tasks run as VS Code tasks; compiler
   errors land in the Problems panel at the right line of your local file,
   even through SQL precompilation and inside copybooks.
+- **Check without deploying**: a task of yours can compile the local source
+  in QTEMP, leaving the deployed member and your objects untouched
+  ([how](#checking-a-source-without-deploying-it)).
 - **Compare with the server**, in VS Code's diff view, without writing files.
 - **Run the SQL under the cursor** (read-only) and see the results beside the
   editor.
@@ -551,18 +554,121 @@ Editing a task needs no reinstall: the CLI and VS Code read it each time.
 | --- | --- | --- |
 | `ibmicli ...` | the same CLI | deploy, pull |
 | `sh: ...` | your local shell | `git`, scripts |
-| `job: ...` | CL via RCMD in the FTP job; changes survive | `ADDLIBLE`, `OVRPRTF` that later steps need |
+| `job: ...` | CL via RCMD in the FTP job; changes survive | `ADDLIBLE`, `OVRPRTF` that later steps need, anything in QTEMP |
 | `task: NAME` | the steps of another task, inlined | reusing tasks |
-| anything else | CL in a QShell child job, with messages | compiling |
+| `cl: ...` or anything else | CL in a QShell child job, with messages | compiling |
 
 An unprefixed `echo hello` is sent to IBM i as CL: use `sh:` for local
-commands. Steps stop at the first failure.
+commands. Steps stop at the first failure, except those written with a `?`
+before the colon: `job?:`, `cl?:`, `sh?:`.
 
-Why two kinds of CL: a normal step runs in a child job, which inherits the
-library list and returns full messages, but whatever it changes (library list,
-overrides, QTEMP) is lost when it ends. A `job:` step changes the FTP job
-itself, so the change lasts for the following steps, but only its result
-comes back, not its messages.
+Why two kinds of CL: a task uses one connection, that is one FTP job on
+IBM i, and `ibmicli` steps such as deploy run inside it. A normal step runs in
+a child job, which inherits the library list and returns full messages, but
+has its own empty QTEMP, and whatever it changes (library list, overrides,
+QTEMP) is lost when it ends. A `job:` step runs in the FTP job itself, so the
+change lasts for the following steps, but only its result comes back, not its
+messages.
+
+Use `job:` when a step must see what an earlier step left in the job. A member
+deployed to `QTEMP` is in the FTP job's QTEMP: a normal CL step cannot find
+it, a `job:` step can. A failed `job:` compilation still shows its errors,
+read from the event file.
+
+### Steps that may fail: `?`
+
+A `?` before the colon (`job?:`, `cl?:`, `sh?:`) lets the task go on when
+that step fails. It does not change where the step runs, only what a failure
+does. Use it when failing means "already done": the file to create already
+exists, the object to delete is already gone.
+
+The usual case is a source file in QTEMP. QTEMP belongs to the FTP job and is
+empty when the connection opens. From the command line and from VS Code every
+run opens its own connection, so `CRTSRCPF` always works. In the interactive
+shell the connection stays open between commands: on the second run the file
+is still there, `CRTSRCPF` fails with "already exists", and a plain `job:`
+would stop the task before compiling. `job?:` keeps going.
+
+### Where compiler errors are read
+
+With `OPTION(*EVENTF)` the compiler writes its errors to `LIB/EVFEVENT`,
+member `NAME`, where `LIB/NAME` is the object it creates. ibmicli reads them
+from the same place: for a `CRT...` command, the library and name in its
+`OBJ()`, `PGM()`, `SRVPGM()`, `MODULE()` or `FILE()`. For other commands
+(a `CALL` to your own build program) and for unqualified names, they are
+`{objlib}` and `{member}`. Errors in the compiled member always point to the
+local `-src` file, whatever library it was compiled from.
+
+### Checking a source without deploying it
+
+You can check that a local source compiles, with the real compiler, without
+replacing the deployed member and without creating objects in your object
+library. The source is compiled as a copy in QTEMP, which disappears when the
+connection closes.
+
+**This is not a built-in command: it is a task you write yourself**, like
+every compilation in ibmicli. Copy the example below into the `[tasks]` of
+your `config.toml` (for all repositories) or of your `ibmiproj.toml` (for one),
+and adapt it to your system. Once it is there, it appears in the VS Code menu
+(F6) like any other task, and runs from the command line with:
+
+```bash
+ibmicli run check -src MYAPP/MYAPP_SRC/QRPGLESRC/HELLO.sqlrpgle -proj ibmiproj.toml
+```
+
+The task, for SQLRPGLE:
+
+```toml
+[tasks."check"]
+label = "Check SQLRPGLE in QTEMP (no deploy)"
+ext   = ["sqlrpgle"]
+env   = true
+steps = [
+  "job?: CRTSRCPF FILE(QTEMP/{srcfile}) RCDLEN(240) CCSID(280)",
+  "ibmicli deploy -src {file} -lib QTEMP -file {srcfile}",
+  "job: CRTSQLRPGI OBJ(QTEMP/{member}) SRCFILE(QTEMP/{srcfile}) SRCMBR({member}) OBJTYPE(*MODULE) OPTION(*EVENTF)",
+]
+```
+
+For CL, the same task with `ext = ["clle"]` and a module instead of a
+program as the last step:
+
+```toml
+  "job: CRTCLMOD MODULE(QTEMP/{member}) SRCFILE(QTEMP/{srcfile}) SRCMBR({member}) OPTION(*EVENTF)",
+```
+
+What each step is for:
+
+- `CRTSRCPF` creates the source file in QTEMP, which is empty at every new
+  connection. It is needed: without it the FTP server creates a data file,
+  not a source file, and the compilation fails. Give it the CCSID of your
+  real source files, or accented letters and symbols change, and a record
+  length at least as long as theirs, or long lines are cut. `CRTDUPOBJ` of the
+  real file would copy both, but needs `*OBJMGT` authority on it. The `?`
+  covers the interactive shell, where the file is still there on the second
+  run (see [Steps that may fail](#steps-that-may-fail-)).
+- The deploy sends the local file to QTEMP, not to your source library.
+- The compilation is a `job:` step so it runs in the FTP job and sees its
+  QTEMP. Its errors appear on the lines of your local file, in the terminal
+  and in the VS Code Problems panel.
+- `env = true` sets up the library list, which the compiler needs for
+  `/copy` members, tables and called programs.
+
+You will not see these objects from a 5250 session: each job has its own
+QTEMP, and this one disappears as soon as the task ends.
+
+A sandbox library works too. Every job sees it, so the compilation can be
+normal CL and returns full messages; create its source file once:
+
+```toml
+steps = [
+  "ibmicli deploy -src {file} -lib MYSANDBOX -file QSRC",
+  "CRTSQLRPGI OBJ(MYSANDBOX/{member}) SRCFILE(MYSANDBOX/QSRC) SRCMBR({member}) OBJTYPE(*MODULE) OPTION(*EVENTF)",
+]
+```
+
+`/copy` members come from IBM i, as in any compilation: a `/copy` changed
+locally and not deployed is checked in its remote version.
 
 ### Placeholders
 

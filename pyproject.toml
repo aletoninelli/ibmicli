@@ -1,6 +1,6 @@
 [project]
 name = "ibmicli"
-version = "0.1.0"
+version = "0.2.0"
 description = "Work with IBM i sources: deploy and pull members over FTP"
 readme = "README.md"
 license = "MIT"

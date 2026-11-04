@@ -137,10 +137,11 @@ def _step(step: str) -> str:
     kind = tasks_mod.kind_of(step)
     if kind == tasks_mod.CLI:
         return f"[cli] {step}"
-    if kind == tasks_mod.SH:
-        return f"[sh]  {tasks_mod.body(step)}"
     if kind == tasks_mod.TASK:
         return f"[task] steps from '{tasks_mod.body(step)}'"
+    mark = "?" if tasks_mod.tolerant(step) else " "
+    if kind == tasks_mod.SH:
+        return f"[sh]{mark} {tasks_mod.body(step)}"
     if kind == tasks_mod.JOB:
-        return f"[job] {tasks_mod.body(step)}"
-    return f"[cl]  {step}"
+        return f"[job]{mark.strip()} {tasks_mod.body(step)}"
+    return f"[cl]{mark} {tasks_mod.body(step)}"

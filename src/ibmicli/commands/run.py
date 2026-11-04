@@ -91,9 +91,11 @@ def run(
     # and the EVFEVENT member read after compilation.
     member = values["member"]
     _refuse_missing(task, raw, values, env, project, here_app, start)
-    steps = [(tasks_mod.kind_of(step), _expand(task, step, values)) for step in raw]
+    steps = [(tasks_mod.kind_of(step), tasks_mod.tolerant(step), _expand(task, step, values))
+             for step in raw]
 
-    output.info(_heading(name, env, member, values["objlib"]))
+    # The arrow says where objects go: only when a step uses {objlib}.
+    output.info(_heading(name, env, member, values["objlib"] if "objlib" in wanted else ""))
 
     _running.add(name)
     try:
@@ -253,7 +255,7 @@ def _execute(
     task: Task,
     env: Env | None,
     member: str,
-    steps: list[tuple[str, str]],
+    steps: list[tuple[str, bool, str]],
     dry_run: bool,
     verbose: bool,
     app: Any,
@@ -268,8 +270,8 @@ def _execute(
         sessions.pin(cfg)
     try:
         # OPTION(*EVENTF) diagnostics use object library and member name.
-        # A task compiling elsewhere can only show general messages
-        # because that event member cannot be located.
+        # A CRT command with a qualified OBJ/PGM/MODULE/SRVPGM names its own
+        # event library and member (cl.events_of); this is for the others.
         events = (objlib, member.upper()) if objlib and member else None
         with Runner(cfg, dry_run=dry_run, verbose=verbose, source=source, events=events,
                     project=project) as runner:
@@ -277,14 +279,19 @@ def _execute(
             # A preceding deploy failure must not run environment setup
             # or touch IBM i unnecessarily.
             ready = False
-            for kind, step in steps:
+            for kind, tolerant, step in steps:
                 if kind in (CL, JOB) and not ready:
                     if not _setup_environment(runner, task, env, member):
                         return 1
                     ready = True
-                if not _step(runner, kind, step, dry_run, app):
-                    output.fail(f"{member + ': ' if member else ''}'{task.name}' stopped")
-                    return 1
+                if _step(runner, kind, step, dry_run, app):
+                    continue
+                if tolerant:
+                    # 'job?:', 'sh?:', 'cl?:': the author accepted this failure.
+                    output.message("[failed, ignored: the step is marked with '?']")
+                    continue
+                output.fail(f"{member + ': ' if member else ''}'{task.name}' stopped")
+                return 1
     finally:
         if shared:
             sessions.unpin()
@@ -319,7 +326,7 @@ def _setup_environment(runner: Runner, task: Task, env: Env | None, member: str)
 
 def _step(runner: Runner, kind: str, step: str, dry_run: bool, app: Any) -> bool:
     if kind == JOB:
-        return runner.setup(step)
+        return runner.job(step).ok
     if kind == CL:
         return runner.run(step).ok
     if kind == SH:

@@ -32,9 +32,21 @@ SH_PREFIX = "sh:"
 # and dry-run displays the flattened sequence.
 TASK_PREFIX = "task:"
 
+# An explicit CL prefix, the same as no prefix. It exists so that CL
+# can be written as 'cl?:' too.
+CL_PREFIX = "cl:"
+
+# 'job?:', 'sh?:' and 'cl?:' mark a step whose failure does not stop the
+# task: CRTSRCPF of a file that already exists, DLTOBJ of a missing object,
+# a final cleanup. ibmicli and task: steps have no '?' form.
+TOLERANT_MARK = "?"
+
 # TASK disappears during flattening; only executable kinds
 # reach the runner.
 CLI, SH, JOB, CL, TASK = "cli", "sh", "job", "cl", "task"
+
+# Prefix words that accept the '?' form, with their kinds.
+_TOLERANT_KINDS = (("job", JOB), ("sh", SH), ("cl", CL))
 
 # Placeholder descriptions in display order for
 # 'ibmicli tasks --guide'.
@@ -96,27 +108,41 @@ class Task:
 QUOTED = (CLI, SH)
 
 
+def _prefixed(text: str) -> tuple[str, bool, int] | None:
+    """Kind, tolerance and prefix length of 'job:', 'sh:', 'cl:' or their '?' forms."""
+    low = text.lower()
+    for word, kind in _TOLERANT_KINDS:
+        for mark, tolerant in ((":", False), (TOLERANT_MARK + ":", True)):
+            if low.startswith(word + mark):
+                return kind, tolerant, len(word + mark)
+    return None
+
+
 def kind_of(step: str) -> str:
     """Classify a step: CLI, SH, JOB, CL or TASK."""
     text = step.strip()
-    if text.lower().startswith(JOB_PREFIX):
-        return JOB
-    if text.lower().startswith(SH_PREFIX):
-        return SH
+    found = _prefixed(text)
+    if found is not None:
+        return found[0]
     if text.lower().startswith(TASK_PREFIX):
         return TASK
     first = text.split(maxsplit=1)[0].lower() if text else ""
     return CLI if first == CLI_PREFIX else CL
 
 
+def tolerant(step: str) -> bool:
+    """Whether a failure of this step lets the task go on ('job?:', 'sh?:', 'cl?:')."""
+    found = _prefixed(step.strip())
+    return found is not None and found[1]
+
+
 def body(step: str) -> str:
     """Step without its kind prefix."""
     text = step.strip()
+    found = _prefixed(text)
+    if found is not None:
+        return text[found[2]:].strip()
     kind = kind_of(text)
-    if kind == JOB:
-        return text[len(JOB_PREFIX):].strip()
-    if kind == SH:
-        return text[len(SH_PREFIX):].strip()
     if kind == TASK:
         return text[len(TASK_PREFIX):].strip()
     if kind == CLI:
@@ -147,6 +173,11 @@ def problems(task: Task, known: set[str] | None = None) -> list[str]:
     for step in task.steps:
         kind = kind_of(step)
         name = body(step)
+        if kind == CL and step.strip().lower().startswith(
+                ("task" + TOLERANT_MARK, CLI_PREFIX + TOLERANT_MARK)):
+            # Otherwise 'task?: x' would go to IBM i as CL and fail there.
+            found.append(f"'?' works only with job:, sh: and cl:, not in: {step.strip()}")
+            continue
         if not name:
             found.append(f"empty step: {step.strip() or '(empty line)'}")
             continue

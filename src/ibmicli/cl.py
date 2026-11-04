@@ -1,7 +1,8 @@
 """Run CL commands and report results.
 
 setup() uses RCMD in the FTP job: library-list changes persist, but only
-success or failure is returned. run() uses a QShell child job and returns
+success or failure is returned. job() is the same for 'job:' task steps, and
+after a failure also reads the event file. run() uses a QShell child job and returns
 messages and status. Child jobs inherit the library list, but have separate
 QTEMP libraries and do not inherit file overrides. State changes in a child
 job do not affect later run() calls.
@@ -42,6 +43,40 @@ ROUTINE_MESSAGES = frozenset({"CPF4011", "CPC7301", "CPC7305", "CPD4090", "CPC09
 ERROR_SEVERITY = 20
 
 SEVERITY_NAMES = {20: "error", 30: "severe error", 40: "severe error", 50: "severe error"}
+
+# The object a CRT command creates: OBJ(LIB/NAME) in CRTSQLRPGI, PGM in
+# CRTBNDRPG/CRTBNDCL, SRVPGM in CRTSRVPGM, MODULE in CRTRPGMOD/CRTCLMOD,
+# FILE in CRTPF/CRTDSPF/CRTSRCPF. With OPTION(*EVENTF) the compiler writes
+# LIB/EVFEVENT(NAME) there. In this order: CRTSRVPGM also has MODULE(...).
+CREATED_OBJECT = tuple(
+    re.compile(rf"\b{keyword}\(\s*(?:([^/()\s]+)\s*/\s*)?([^/()\s]+)\s*\)", re.IGNORECASE)
+    for keyword in ("OBJ", "PGM", "SRVPGM", "MODULE", "FILE")
+)
+
+
+def events_of(command: str, default: tuple[str, str] | None) -> tuple[str, str] | None:
+    """Event file library and member written by a command.
+
+    Not a guess: it is where the compiler writes them. Only CRT commands are
+    read, because in CALL PGM(LIB/X) the library is the called program's.
+    A missing or special library (*CURLIB, *LIBL) keeps the default one,
+    the task's object library; any other command keeps the default entirely.
+    """
+    words = command.split(maxsplit=1)
+    # In CRTDUPOBJ, OBJ() is the object copied, not the one created.
+    if not words or not words[0].upper().startswith("CRT") or words[0].upper() == "CRTDUPOBJ":
+        return default
+    match = next((found for pattern in CREATED_OBJECT if (found := pattern.search(command))), None)
+    if match is None:
+        return default
+    library, name = match.group(1), match.group(2)
+    if name.startswith("*"):
+        return default
+    if not library or library.startswith("*"):
+        if default is None:
+            return None
+        library = default[0]
+    return library.upper(), name.upper()
 
 
 @dataclass
@@ -147,8 +182,9 @@ class Runner:
         if self.dry_run:
             return Result(command, 0)
 
+        where = events_of(command, self.events)
         try:
-            before = self._events_stamp()
+            before = self._events_stamp(where)
             rc, lines = self.session.run_cl(command)
         except SessionError as exc:
             # Connection failures also become results so callers can
@@ -158,27 +194,53 @@ class Runner:
 
         result = Result(command, rc, lines)
         if not result.ok:
-            result.events = self._read_events(before)
-        self._report(result)
+            result.events = self._read_events(where, before)
+        self._report(result, where)
         return result
 
-    def _events_member(self) -> list[str] | None:
+    def job(self, command: str) -> Result:
+        """Run a 'job:' step with RCMD in the FTP job, then read its diagnostics.
+
+        Like setup(), its changes persist and IBM i returns no messages; unlike
+        setup(), a failed compilation shows the event-file errors, which is
+        the only way to see them for a source compiled in the FTP job's QTEMP.
+        """
+        output.command(command)
+        if self.dry_run:
+            return Result(command, 0)
+
+        where = events_of(command, self.events)
+        before = self._events_stamp(where)
+        try:
+            self.session.rcmd(command)
+        except SessionError as exc:
+            output.message(str(exc))
+            result = Result(command, 1)
+            result.events = self._read_events(where, before)
+            for group in _by_place(result.events or []):
+                self._diagnostic(group)
+            return result
+        return Result(command, 0)
+
+    def _events_member(self, where: tuple[str, str] | None) -> list[str] | None:
         """Object event member, if available."""
-        if self.events is None:
+        if where is None:
             return None
-        library, name = self.events
+        library, name = where
         try:
             return self.session.get(library, evfevent.FILE, name)
         except SessionError:
             return None
 
-    def _events_stamp(self) -> str | None:
+    def _events_stamp(self, where: tuple[str, str] | None) -> str | None:
         """Event timestamp before execution; unchanged means stale diagnostics."""
-        lines = self._events_member()
+        lines = self._events_member(where)
         return evfevent.stamp(lines) if lines is not None else None
 
-    def _read_events(self, before: str | None) -> list[evfevent.Error] | None:
-        lines = self._events_member()
+    def _read_events(
+        self, where: tuple[str, str] | None, before: str | None
+    ) -> list[evfevent.Error] | None:
+        lines = self._events_member(where)
         if lines is None or evfevent.stamp(lines) == before:
             return None
         return evfevent.parse(lines, ERROR_SEVERITY)
@@ -192,7 +254,7 @@ class Runner:
 
     # --- Output ------------------------------------------------------------
 
-    def _report(self, result: Result) -> None:
+    def _report(self, result: Result, where: tuple[str, str] | None) -> None:
         if self.verbose:
             for line in result.lines:
                 output.message(line.rstrip())
@@ -206,8 +268,8 @@ class Runner:
             if result.events:
                 for group in _by_place(result.events):
                     self._diagnostic(group)
-            elif not result.ok and result.listing_size and self.events is not None:
-                library, name = self.events
+            elif not result.ok and result.listing_size and where is not None:
+                library, name = where
                 output.message(
                     f"[no new diagnostics in {library}/{evfevent.FILE}({name}): "
                     "compile with OPTION(*EVENTF) to obtain source locations]"

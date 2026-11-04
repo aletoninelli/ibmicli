@@ -24,16 +24,52 @@ Steps stop at the first failure. Their prefixes select five kinds:
   ibmicli deploy -src {file}    a command in this CLI
   sh: ./script.sh {file}        a local shell command
   task: other-task              another task's steps, inserted here
-  job: ADDLIBLE MYLIB           CL setup in the persistent FTP job
+  job: ADDLIBLE MYLIB           CL in the FTP job, which lasts for later steps
   CRTSQLRPGI OBJ(...)           CL in a separate QShell child job
 
-An unprefixed step is CL. 'echo hello' goes to IBM i and fails with CPD0030;
-use 'sh: echo hello' to run it locally.
+An unprefixed step is CL ('cl:' says the same explicitly). 'echo hello' goes
+to IBM i and fails with CPD0030; use 'sh: echo hello' to run it locally.
 
-Normal CL inherits the FTP job library list, but uses separate QTEMP and
-does not inherit file overrides. 'job:' can preserve library-list changes
-for later steps; it returns status only, without a listing or messages.
-An ADDLIBLE in a normal CL step disappears with that child job.
+One task uses one connection, so one FTP job on IBM i. 'ibmicli' steps
+(deploy, pull) and 'job:' steps run inside that job; a normal CL step starts
+a child job through QShell and ends with it.
+
+Normal CL inherits the FTP job library list, but has its own empty QTEMP
+and does not inherit file overrides. Whatever it changes is lost when it
+ends: an ADDLIBLE in a normal CL step disappears with that child job.
+
+'job:' runs the CL in the FTP job itself, so library-list changes, overrides
+and QTEMP objects last for the following steps. Use it when a step must see
+what an earlier step left in the job: a member deployed to QTEMP is visible
+only to 'job:' steps, not to normal CL. IBM i returns only success or
+failure, without messages; a failed compilation still shows its event-file
+errors.
+
+A '?' before the colon lets the task go on when that step fails:
+
+  job?: CRTSRCPF FILE(QTEMP/QRPGLESRC) RCDLEN(112)
+  cl?:  DLTOBJ OBJ(MYLIB/OLD) OBJTYPE(*FILE)
+  sh?:  rm -f build.log
+
+'?' does not change where the step runs: 'job?:' is still the FTP job, and
+'cl?:' a child job. It only changes what a failure does. Use it when the
+failure means "already done": the file to create already exists, the object
+to delete is already gone. ibmicli and task: steps have no '?' form.
+
+Why CRTSRCPF in QTEMP needs it. QTEMP belongs to the FTP job and is empty
+when the connection opens. From the command line and from VS Code every run
+opens its own connection, so CRTSRCPF always works. In the interactive
+shell (plain 'ibmicli') the connection stays open between commands: on the
+second run the file is still in QTEMP, CRTSRCPF fails with "already exists",
+and with a plain 'job:' the task would stop before compiling.
+
+Compiler errors come from LIB/EVFEVENT(NAME), written by OPTION(*EVENTF).
+For a CRT command, LIB and NAME are those of its OBJ(), PGM(), SRVPGM(),
+MODULE() or FILE(): OBJ(QTEMP/{member}) is read from QTEMP/EVFEVENT. For
+other commands, such as a CALL to your build program, and for an
+unqualified name, they are {objlib} and {member}. Errors in the compiled
+member are always shown on the local -src file, in whatever library and
+source file it was compiled.
 
 Only tasks that use source placeholders require -src. Environment values
 or env = true with CL require an environment. Standalone tasks can run as
@@ -74,6 +110,34 @@ EXAMPLE = """Example to copy and adapt:
 {srclib} and {srcfile} come from the project source folders, or explicit
 -var values. OPTION(*EVENTF) writes compiler diagnostics to the event file;
 ibmicli maps them to file:line:column in the terminal and VS Code Problems.
+
+Check the local source without deploying it: compile a copy in QTEMP.
+The deployed member and the object library are not touched, and the module
+disappears with the connection. The compilation is 'job:' so it sees the
+FTP job's QTEMP. CRTSRCPF is needed: without it the FTP server creates a
+data file, not a source file, and the compilation fails. Give it the CCSID
+of your real source files (or accented letters and symbols change) and a
+record length at least as long as theirs. CRTDUPOBJ of the real file would
+copy both, but needs *OBJMGT authority on it.
+
+  [tasks."check"]
+  label = "Check SQLRPGLE in QTEMP (no deploy)"
+  ext   = ["sqlrpgle"]
+  env   = true
+  steps = [
+    "job?: CRTSRCPF FILE(QTEMP/{srcfile}) RCDLEN(240) CCSID(280)",
+    "ibmicli deploy -src {file} -lib QTEMP -file {srcfile}",
+    "job: CRTSQLRPGI OBJ(QTEMP/{member}) SRCFILE(QTEMP/{srcfile}) SRCMBR({member}) OBJTYPE(*MODULE) OPTION(*EVENTF)",
+  ]
+
+A sandbox library instead of QTEMP (create its source file once) is seen by
+every job, so the compilation can be normal CL and returns full messages:
+
+    "ibmicli deploy -src {file} -lib MYSANDBOX -file QSRC",
+    "CRTSQLRPGI OBJ(MYSANDBOX/{member}) SRCFILE(MYSANDBOX/QSRC) SRCMBR({member}) OBJTYPE(*MODULE) OPTION(*EVENTF)",
+
+/copy members come from IBM i, as in any compilation: a /copy changed
+locally and not deployed is checked in its remote version.
 """
 
 
