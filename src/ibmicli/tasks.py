@@ -66,6 +66,11 @@ PLACEHOLDERS: tuple[tuple[str, str], ...] = (
 
 KNOWN = {name for name, _ in PLACEHOLDERS}
 
+# Where OPTION(*EVENTF) writes when the task does not say otherwise:
+# OBJ({objlib}/{member}). A task compiling elsewhere (QTEMP, a sandbox,
+# a build program with its own OBJLIB) writes its own 'eventf'.
+EVENTF_DEFAULT = "{objlib}/{member}"
+
 # Source-dependent placeholders require -src.
 # Standalone shell or CL tasks need no invented member.
 SOURCE = frozenset(
@@ -87,6 +92,9 @@ class Task:
     ext: tuple[str, ...] = ()
     env: bool = True  # Set up the environment before the first CL.
     steps: tuple[str, ...] = ()
+    # LIBRARY/MEMBER of the event file read after a failed compilation,
+    # with placeholders. Empty means EVENTF_DEFAULT.
+    eventf: str = ""
 
     @property
     def title(self) -> str:
@@ -190,6 +198,13 @@ def problems(task: Task, known: set[str] | None = None) -> list[str]:
         for placeholder in used(step):
             if placeholder not in KNOWN:
                 found.append(f"unknown placeholder {{{placeholder}}} in: {step}")
+    if task.eventf:
+        library, slash, member = task.eventf.partition("/")
+        if not slash or not library.strip() or not member.strip() or "/" in member:
+            found.append(f"eventf must be LIBRARY/MEMBER, not: {task.eventf}")
+        for placeholder in used(task.eventf):
+            if placeholder not in KNOWN:
+                found.append(f"unknown placeholder {{{placeholder}}} in eventf: {task.eventf}")
     return found
 
 
@@ -225,5 +240,6 @@ def read(raw: object) -> dict[str, Task]:
             ),
             env=bool(values.get("env", True)),
             steps=_texts(values.get("steps")),
+            eventf=str(values.get("eventf", "") or "").strip(),
         )
     return tasks

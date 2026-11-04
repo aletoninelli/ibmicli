@@ -126,6 +126,8 @@ def _task(cfg: Config, short: bool) -> None:
         print(f"{task.name}   {task.title}")
         extensions = ", ".join(f".{e}" for e in task.ext) or "any file"
         print(f"  extensions: {extensions}   environment: {'yes' if task.env else 'no'}")
+        if task.eventf:
+            print(f"  eventf: {task.eventf}")
         for index, step in enumerate(task.steps, start=1):
             print(f"  {index}. {_step(step)}")
         for trouble in tasks_mod.problems(task):

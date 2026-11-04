@@ -44,40 +44,6 @@ ERROR_SEVERITY = 20
 
 SEVERITY_NAMES = {20: "error", 30: "severe error", 40: "severe error", 50: "severe error"}
 
-# The object a CRT command creates: OBJ(LIB/NAME) in CRTSQLRPGI, PGM in
-# CRTBNDRPG/CRTBNDCL, SRVPGM in CRTSRVPGM, MODULE in CRTRPGMOD/CRTCLMOD,
-# FILE in CRTPF/CRTDSPF/CRTSRCPF. With OPTION(*EVENTF) the compiler writes
-# LIB/EVFEVENT(NAME) there. In this order: CRTSRVPGM also has MODULE(...).
-CREATED_OBJECT = tuple(
-    re.compile(rf"\b{keyword}\(\s*(?:([^/()\s]+)\s*/\s*)?([^/()\s]+)\s*\)", re.IGNORECASE)
-    for keyword in ("OBJ", "PGM", "SRVPGM", "MODULE", "FILE")
-)
-
-
-def events_of(command: str, default: tuple[str, str] | None) -> tuple[str, str] | None:
-    """Event file library and member written by a command.
-
-    Not a guess: it is where the compiler writes them. Only CRT commands are
-    read, because in CALL PGM(LIB/X) the library is the called program's.
-    A missing or special library (*CURLIB, *LIBL) keeps the default one,
-    the task's object library; any other command keeps the default entirely.
-    """
-    words = command.split(maxsplit=1)
-    # In CRTDUPOBJ, OBJ() is the object copied, not the one created.
-    if not words or not words[0].upper().startswith("CRT") or words[0].upper() == "CRTDUPOBJ":
-        return default
-    match = next((found for pattern in CREATED_OBJECT if (found := pattern.search(command))), None)
-    if match is None:
-        return default
-    library, name = match.group(1), match.group(2)
-    if name.startswith("*"):
-        return default
-    if not library or library.startswith("*"):
-        if default is None:
-            return None
-        library = default[0]
-    return library.upper(), name.upper()
-
 
 @dataclass
 class Result:
@@ -136,9 +102,9 @@ class Runner:
         self.source = source
         # Explicit project used to locate local copies.
         self.project = project
-        # Object library and member for LIBRARY/EVFEVENT(OBJECT).
-        # Compilation with OPTION(*EVENTF) writes the diagnostics here.
-        # The task knows these values from its project and source.
+        # Library and member of LIBRARY/EVFEVENT(MEMBER), where compilation
+        # with OPTION(*EVENTF) writes the diagnostics. The task says where:
+        # its 'eventf', or object library and member name.
         self.events = events
         self._session: Session | None = None
 
@@ -182,7 +148,7 @@ class Runner:
         if self.dry_run:
             return Result(command, 0)
 
-        where = events_of(command, self.events)
+        where = self.events
         try:
             before = self._events_stamp(where)
             rc, lines = self.session.run_cl(command)
@@ -209,7 +175,7 @@ class Runner:
         if self.dry_run:
             return Result(command, 0)
 
-        where = events_of(command, self.events)
+        where = self.events
         before = self._events_stamp(where)
         try:
             self.session.rcmd(command)
@@ -219,6 +185,10 @@ class Runner:
             result.events = self._read_events(where, before)
             for group in _by_place(result.events or []):
                 self._diagnostic(group)
+            if not result.events and where is not None:
+                # Says where it looked: a wrong 'eventf' shows up here.
+                library, name = where
+                output.message(f"[no new diagnostics in {library}/{evfevent.FILE}({name})]")
             return result
         return Result(command, 0)
 

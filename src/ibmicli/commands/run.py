@@ -65,7 +65,9 @@ def run(
     # Flatten task inclusions before discovering requirements:
     # included steps can introduce additional placeholders.
     raw = _flatten(available, task)
-    wanted = {holder for step in raw for holder in tasks_mod.used(step)}
+    # An explicit eventf is part of the task like its steps: its placeholders
+    # need values. The default one is used only when its values exist.
+    wanted = {holder for step in [*raw, task.eventf] for holder in tasks_mod.used(step)}
 
     member, ext = "", ""
     found = prj.resolve(cfg, project, start)
@@ -101,7 +103,7 @@ def run(
     try:
         return _execute(
             cfg, task, env, member, steps, dry_run, verbose, app,
-            Path(source) if source else None, values["objlib"], project,
+            Path(source) if source else None, _events(task, values), project,
         )
     finally:
         _running.discard(name)
@@ -165,7 +167,7 @@ def _refuse_missing(
     task.env is true, even if no placeholder names it.
     """
     missing: list[str] = []
-    for step in raw:
+    for step in [*raw, task.eventf]:
         for holder in tasks_mod.used(step):
             if not values.get(holder) and holder not in missing:
                 missing.append(holder)
@@ -205,6 +207,20 @@ def _refuse_missing(
         + note
         + (prj.PROJ_HINT if project is None else "")
     )
+
+
+def _events(task: Task, values: dict[str, str]) -> tuple[str, str] | None:
+    """Library and member of the event file read after a failed compilation.
+
+    The task's 'eventf' when written, otherwise object library and member.
+    Not read from the command text: a build program's OBJLIB or a CRT's OBJ
+    can mean anything, and the task author knows where it compiles.
+    """
+    if task.eventf:
+        library, _, name = _expand(task, task.eventf, values).partition("/")
+        return check_object(library, "eventf library"), check_object(name, "eventf member")
+    objlib, member = values.get("objlib", ""), values.get("member", "")
+    return (objlib, member.upper()) if objlib and member else None
 
 
 def _heading(name: str, env: Env | None, member: str, objlib: str) -> str:
@@ -260,7 +276,7 @@ def _execute(
     verbose: bool,
     app: Any,
     source: Path | None = None,
-    objlib: str = "",
+    events: tuple[str, str] | None = None,
     project: prj.Project | None = None,
 ) -> int:
     # Pin one connection for the task unless the shell
@@ -269,10 +285,6 @@ def _execute(
     if shared:
         sessions.pin(cfg)
     try:
-        # OPTION(*EVENTF) diagnostics use object library and member name.
-        # A CRT command with a qualified OBJ/PGM/MODULE/SRVPGM names its own
-        # event library and member (cl.events_of); this is for the others.
-        events = (objlib, member.upper()) if objlib and member else None
         with Runner(cfg, dry_run=dry_run, verbose=verbose, source=source, events=events,
                     project=project) as runner:
             # Set up immediately before the first CL, preserving step order.

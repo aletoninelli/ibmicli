@@ -26,15 +26,18 @@ and is updated with `ibmicli vscode install`.
 - **`cl:` prefix**, the same as an unprefixed CL step, written explicitly. It
   exists so that CL can be written as `cl?:` too.
 
+- **`eventf`: where a task's compiler errors are read.** A new optional task
+  key, `eventf = "LIBRARY/NAME"` with placeholders, says which
+  `LIBRARY/EVFEVENT(NAME)` holds the errors. Without it, as before,
+  `{objlib}/{member}`. A task that compiles elsewhere, such as the check in
+  QTEMP, writes `eventf = "QTEMP/{member}"`. It works with any command, your
+  own build programs included: ibmicli does not read the command.
+
 ### Changed
 
-- **Compiler errors are read where the compiler writes them.** For a `CRT...`
-  command, the event file is read from the library and name in its `OBJ()`,
-  `PGM()`, `SRVPGM()`, `MODULE()` or `FILE()`, instead of always from the
-  task's object library. Other commands, such as a `CALL` to your own build
-  program, work as before.
 - **Errors after a `job:` step.** A failed compilation in a `job:` step now
   shows its errors from the event file; before, it only said that it failed.
+  When there are none, it says where it looked.
 - The task heading shows `-> LIBRARY` only when a step uses `{objlib}`.
 - The task guide explains what `job:` does and when it is needed: QTEMP is
   per job, and a normal CL step runs in a child job with its own QTEMP.

@@ -540,6 +540,7 @@ Tasks are your build and utility commands. They live only in your files:
 label = "Upload and compile"   # optional, shown in F6
 ext = ["sqlrpgle"]             # extensions it applies to; [] = all
 env = true                     # set up the environment before the first CL step
+# eventf = "QTEMP/{member}"    # only if it compiles outside {objlib}: see below
 steps = [
   "ibmicli deploy -src {file} -lib {srclib} -file {srcfile}",
   "CRTSQLRPGI OBJ({objlib}/{member}) SRCFILE({srclib}/{srcfile}) SRCMBR({member}) OBJTYPE(*PGM) OPTION(*EVENTF) DBGVIEW(*SOURCE)",
@@ -592,12 +593,26 @@ would stop the task before compiling. `job?:` keeps going.
 ### Where compiler errors are read
 
 With `OPTION(*EVENTF)` the compiler writes its errors to `LIB/EVFEVENT`,
-member `NAME`, where `LIB/NAME` is the object it creates. ibmicli reads them
-from the same place: for a `CRT...` command, the library and name in its
-`OBJ()`, `PGM()`, `SRVPGM()`, `MODULE()` or `FILE()`. For other commands
-(a `CALL` to your own build program) and for unqualified names, they are
-`{objlib}` and `{member}`. Errors in the compiled member always point to the
-local `-src` file, whatever library it was compiled from.
+member `NAME`, where `LIB/NAME` is the object it creates. When a step fails,
+ibmicli reads that member, so it has to know `LIB` and `NAME`. It does not
+read them from the command: the task tells it.
+
+- **By default** they are `{objlib}/{member}`: the object library and the
+  source name. That fits every task that compiles into the object library,
+  with a `CRT...` command or with your own build program that you call with
+  `OBJLIB({objlib})`. Nothing to write.
+- **A task that compiles anywhere else** says so with `eventf`, written as
+  `LIBRARY/NAME` with placeholders:
+
+  ```toml
+  eventf = "QTEMP/{member}"      # the task compiles OBJ(QTEMP/{member})
+  ```
+
+If `eventf` is wrong, a failed compilation shows no errors, and a failed
+`job:` step says where it looked: `[no new diagnostics in
+API_OBJ/EVFEVENT(HELLO)]`. Like `ext` and `env`, `eventf` belongs to the task
+you run, not to the tasks it includes. Errors in the compiled member always
+point to the local `-src` file, whatever library it was compiled from.
 
 ### Checking a source without deploying it
 
@@ -620,10 +635,11 @@ The task, for SQLRPGLE:
 
 ```toml
 [tasks."check"]
-label = "Check SQLRPGLE in QTEMP (no deploy)"
-ext   = ["sqlrpgle"]
-env   = true
-steps = [
+label  = "Check SQLRPGLE in QTEMP (no deploy)"
+ext    = ["sqlrpgle"]
+env    = true
+eventf = "QTEMP/{member}"
+steps  = [
   "job?: CRTSRCPF FILE(QTEMP/{srcfile}) RCDLEN(240) CCSID(280)",
   "ibmicli deploy -src {file} -lib QTEMP -file {srcfile}",
   "job: CRTSQLRPGI OBJ(QTEMP/{member}) SRCFILE(QTEMP/{srcfile}) SRCMBR({member}) OBJTYPE(*MODULE) OPTION(*EVENTF)",
@@ -653,6 +669,9 @@ What each step is for:
   and in the VS Code Problems panel.
 - `env = true` sets up the library list, which the compiler needs for
   `/copy` members, tables and called programs.
+- `eventf` tells ibmicli that the errors are in `QTEMP/EVFEVENT`, where this
+  compilation writes them, and not in your object library (see
+  [Where compiler errors are read](#where-compiler-errors-are-read)).
 
 You will not see these objects from a 5250 session: each job has its own
 QTEMP, and this one disappears as soon as the task ends.
@@ -661,6 +680,7 @@ A sandbox library works too. Every job sees it, so the compilation can be
 normal CL and returns full messages; create its source file once:
 
 ```toml
+eventf = "MYSANDBOX/{member}"
 steps = [
   "ibmicli deploy -src {file} -lib MYSANDBOX -file QSRC",
   "CRTSQLRPGI OBJ(MYSANDBOX/{member}) SRCFILE(MYSANDBOX/QSRC) SRCMBR({member}) OBJTYPE(*MODULE) OPTION(*EVENTF)",
@@ -692,7 +712,7 @@ why the deploy step above passes `-lib {srclib} -file {srcfile}`.
 ### Compiler errors
 
 With `OPTION(*EVENTF)`, the compiler writes its errors to
-`OBJLIB/EVFEVENT(MEMBER)`. ibmicli reads them and maps each one back to your
+`OBJLIB/EVFEVENT(MEMBER)`, or where the task's `eventf` says. ibmicli reads them and maps each one back to your
 local file, line and column, including inside copybooks and through SQL
 precompilation. The terminal and the VS Code Problems panel can open the
 location. A copybook that is not local is shown by its IBM i name.

@@ -18,6 +18,7 @@ label = "Menu label"              # optional
 ext   = ["sqlrpgle"]              # [] accepts every extension
 env   = true                      # set up before the first CL
 steps = [ ... ]                   # executed in order
+eventf = "QTEMP/{member}"         # optional: where compiler errors are read
 
 Steps stop at the first failure. Their prefixes select five kinds:
 
@@ -63,13 +64,23 @@ shell (plain 'ibmicli') the connection stays open between commands: on the
 second run the file is still in QTEMP, CRTSRCPF fails with "already exists",
 and with a plain 'job:' the task would stop before compiling.
 
-Compiler errors come from LIB/EVFEVENT(NAME), written by OPTION(*EVENTF).
-For a CRT command, LIB and NAME are those of its OBJ(), PGM(), SRVPGM(),
-MODULE() or FILE(): OBJ(QTEMP/{member}) is read from QTEMP/EVFEVENT. For
-other commands, such as a CALL to your build program, and for an
-unqualified name, they are {objlib} and {member}. Errors in the compiled
-member are always shown on the local -src file, in whatever library and
+Compiler errors. A compilation with OPTION(*EVENTF) writes its errors to
+LIBRARY/EVFEVENT(NAME), where LIBRARY and NAME are those of the object it
+creates. When a CL or job: step fails, ibmicli reads that member and shows
+the errors on the lines of the local -src file, in whatever library and
 source file it was compiled.
+
+ibmicli does not read the command to find LIBRARY and NAME: the task says
+it with 'eventf = "LIBRARY/NAME"', placeholders allowed. Without it they
+are {objlib}/{member}, which fits a compilation into the object library,
+whether by CRT command or by your own build program with OBJLIB({objlib}).
+A task that compiles anywhere else writes eventf:
+
+  eventf = "QTEMP/{member}"       # compiles OBJ(QTEMP/{member})
+
+Like ext and env, eventf belongs to the task you run: an included task's
+eventf is not used. When nothing new is found, a failed job: step says
+where it looked.
 
 Only tasks that use source placeholders require -src. Environment values
 or env = true with CL require an environment. Standalone tasks can run as
@@ -121,17 +132,22 @@ record length at least as long as theirs. CRTDUPOBJ of the real file would
 copy both, but needs *OBJMGT authority on it.
 
   [tasks."check"]
-  label = "Check SQLRPGLE in QTEMP (no deploy)"
-  ext   = ["sqlrpgle"]
-  env   = true
-  steps = [
+  label  = "Check SQLRPGLE in QTEMP (no deploy)"
+  ext    = ["sqlrpgle"]
+  env    = true
+  eventf = "QTEMP/{member}"
+  steps  = [
     "job?: CRTSRCPF FILE(QTEMP/{srcfile}) RCDLEN(240) CCSID(280)",
     "ibmicli deploy -src {file} -lib QTEMP -file {srcfile}",
     "job: CRTSQLRPGI OBJ(QTEMP/{member}) SRCFILE(QTEMP/{srcfile}) SRCMBR({member}) OBJTYPE(*MODULE) OPTION(*EVENTF)",
   ]
 
+eventf tells ibmicli that the errors are in QTEMP, where this compilation
+writes them, not in the object library.
+
 A sandbox library instead of QTEMP (create its source file once) is seen by
-every job, so the compilation can be normal CL and returns full messages:
+every job, so the compilation can be normal CL and returns full messages.
+Write eventf = "MYSANDBOX/{member}":
 
     "ibmicli deploy -src {file} -lib MYSANDBOX -file QSRC",
     "CRTSQLRPGI OBJ(MYSANDBOX/{member}) SRCFILE(MYSANDBOX/QSRC) SRCMBR({member}) OBJTYPE(*MODULE) OPTION(*EVENTF)",
@@ -231,6 +247,8 @@ def _show(task: Task, available: dict[str, Task], where: dict[str, Path]) -> Non
     print(f"{task.name}: {task.title}")
     print(f"  extensions: {', '.join(f'.{e}' for e in task.ext) or 'any file'}")
     print(f"  environment:   {'yes' if task.env else 'no'}")
+    if task.eventf:
+        print(f"  eventf:        {task.eventf}")
     print("  steps:")
     for step in task.steps:
         print(f"    {step}")
